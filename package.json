@@ -2,6 +2,7 @@
   "name": "ara-mcp-server",
   "version": "1.0.0",
   "description": "MCP Server for Ara RGAA accessibility audit management",
+  "license": "EUPL-1.2",
   "type": "module",
   "bin": {
     "ara-mcp": "./build/index.js"
