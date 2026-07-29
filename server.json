@@ -1,0 +1,50 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.DavidPivert/ara-rgaa-mcp",
+  "title": "Ara — audits d'accessibilité RGAA",
+  "description": "Créer, remplir et publier des audits RGAA 4.1 sur Ara (plateforme de l'État). Non officiel.",
+  "version": "2.0.1",
+  "repository": {
+    "url": "https://github.com/DavidPivert/ara-rgaa-mcp",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/DavidPivert/ara-rgaa-mcp#readme",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "ara-rgaa-mcp",
+      "version": "2.0.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "ARA_AUTH_TOKEN",
+          "description": "Jeton JWT Ara. Voie recommandée : elle évite d'écrire un mot de passe en clair dans la configuration.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "ARA_USERNAME",
+          "description": "Adresse e-mail du compte Ara, utilisée pour l'authentification au démarrage si ARA_AUTH_TOKEN n'est pas fourni.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "ARA_PASSWORD",
+          "description": "Mot de passe du compte Ara, utilisé avec ARA_USERNAME. Préférer ARA_AUTH_TOKEN.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "ARA_BASE_URL",
+          "description": "URL de base de l'API Ara. Par défaut https://ara.numerique.gouv.fr/api ; à changer uniquement pour viser une instance Ara auto-hébergée.",
+          "isRequired": false,
+          "isSecret": false,
+          "default": "https://ara.numerique.gouv.fr/api"
+        }
+      ]
+    }
+  ]
+}
