@@ -22,11 +22,17 @@ import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { AraClient } from "./ara-client.js";
+import {
+  RGAA_VERSION,
+  RGAA_TOPICS,
+  FAST_CRITERIA,
+  COMPLEMENTARY_CRITERIA,
+} from "./rgaa-data.js";
 
 // ─── Configuration ────────────────────────────────────────
 
 /** Keep in sync with the "version" field of package.json. */
-const SERVER_VERSION = "2.1.3";
+const SERVER_VERSION = "2.2.0";
 
 const ARA_BASE_URL =
   process.env.ARA_BASE_URL || "https://ara.numerique.gouv.fr/api";
@@ -154,10 +160,126 @@ async function authenticateFromEnv(preferLogin = false): Promise<string> {
   return "Re-authenticated from ARA_USERNAME / ARA_PASSWORD. Token refreshed.";
 }
 
+// ─── RGAA reference ───────────────────────────────────────
+
+/** Criteria covered by an Ara audit type, as "topic.criterium" ids. */
+function criteriaIdsFor(auditType: "FULL" | "FAST" | "COMPLEMENTARY"): string[] | null {
+  if (auditType === "FAST") return FAST_CRITERIA;
+  if (auditType === "COMPLEMENTARY") return COMPLEMENTARY_CRITERIA;
+  return null; // FULL: every criterion
+}
+
 // ─── Tools ────────────────────────────────────────────────
 
 /** Declare every tool on a server instance. Called once per instance built. */
 function registerAllTools(server: McpServer): void {
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  TOOL: list_rgaa_criteria
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+server.registerTool(
+  "list_rgaa_criteria",
+  {
+    title: "List the RGAA criteria",
+    description: `List RGAA ${RGAA_VERSION} criteria as an index: topic number, topic name, criterion number and wording. Tests are NOT included — call get_rgaa_criterion for those.
+
+Use this to know what an audit actually covers before evaluating anything. Filter to keep the answer small:
+- auditType FAST — the 25 criteria of a rapid audit
+- auditType COMPLEMENTARY — the 25 complementary criteria (disjoint from the rapid ones)
+- auditType FULL, or no filter — all 106
+- topic — restrict to one of the 13 topics
+
+Source: the RGAA reference shipped with Ara, published by the DINUM under Licence Ouverte 2.0.`,
+    inputSchema: z.object({
+      auditType: z
+        .enum(["FULL", "FAST", "COMPLEMENTARY"])
+        .optional()
+        .describe("Keep only the criteria covered by this Ara audit type"),
+      topic: z
+        .number()
+        .min(1)
+        .max(13)
+        .optional()
+        .describe("Keep only this RGAA topic (1-13)"),
+    }),
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async ({ auditType, topic }) => {
+    try {
+      const keep = auditType ? criteriaIdsFor(auditType) : null;
+      const topics = RGAA_TOPICS.filter((t) => !topic || t.number === topic).map(
+        (t) => ({
+          topic: t.number,
+          name: t.name,
+          criteria: t.criteria
+            .filter((c) => !keep || keep.includes(`${t.number}.${c.number}`))
+            .map((c) => ({
+              id: `${t.number}.${c.number}`,
+              title: c.title,
+            })),
+        })
+      );
+      const kept = topics.filter((t) => t.criteria.length > 0);
+      return textResult({
+        rgaaVersion: RGAA_VERSION,
+        filter: { auditType: auditType ?? "none", topic: topic ?? "none" },
+        criteriaCount: kept.reduce((a, t) => a + t.criteria.length, 0),
+        topics: kept,
+      });
+    } catch (err) {
+      return errorResult(err);
+    }
+  }
+);
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  TOOL: get_rgaa_criterion
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+server.registerTool(
+  "get_rgaa_criterion",
+  {
+    title: "Get one RGAA criterion and its tests",
+    description: `Return the wording of a single RGAA ${RGAA_VERSION} criterion AND its numbered tests — the checks an auditor actually performs to decide COMPLIANT / NOT_COMPLIANT / NOT_APPLICABLE.
+
+Call this before evaluating a criterion with update_audit_results: it is what turns "topic 6, criterium 1" into something you can actually assess. Also tells whether the criterion belongs to the rapid or complementary audit.
+
+Source: the RGAA reference shipped with Ara, published by the DINUM under Licence Ouverte 2.0.`,
+    inputSchema: z.object({
+      topic: z.number().min(1).max(13).describe("RGAA topic number (1-13)"),
+      criterium: z.number().min(1).describe("Criterion number within the topic"),
+    }),
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async ({ topic, criterium }) => {
+    try {
+      const t = RGAA_TOPICS.find((x) => x.number === topic);
+      const c = t?.criteria.find((x) => x.number === criterium);
+      if (!t || !c) {
+        const available = (t?.criteria ?? []).map((x) => `${topic}.${x.number}`);
+        throw new Error(
+          `No RGAA criterion ${topic}.${criterium}.` +
+            (t
+              ? ` Topic ${topic} (${t.name}) has: ${available.join(", ")}.`
+              : ` Topics run from 1 to 13.`)
+        );
+      }
+      const id = `${topic}.${criterium}`;
+      return textResult({
+        rgaaVersion: RGAA_VERSION,
+        id,
+        topic: { number: t.number, name: t.name },
+        title: c.title,
+        inFastAudit: FAST_CRITERIA.includes(id),
+        inComplementaryAudit: COMPLEMENTARY_CRITERIA.includes(id),
+        tests: c.tests,
+      });
+    } catch (err) {
+      return errorResult(err);
+    }
+  }
+);
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  TOOL: auth_refresh
@@ -205,8 +327,10 @@ server.registerTool(
 
 Audit types:
 - FULL: all 106 RGAA criteria
-- FAST: 25 key criteria (audit rapide)
-- COMPLEMENTARY: 50 criteria (audit complémentaire)`,
+- FAST: 25 criteria (audit rapide)
+- COMPLEMENTARY: 25 criteria (audit complémentaire) — disjoint from the rapid ones, the two methodologies together covering 50
+
+Call list_rgaa_criteria to see exactly which criteria a type covers.`,
     inputSchema: z.object({
           auditType: z
             .enum(["FULL", "FAST", "COMPLEMENTARY"])
@@ -535,6 +659,8 @@ The topic/criterium must be a valid RGAA combination. Topics 1-13:
 10. Présentation, 11. Formulaires, 12. Navigation, 13. Consultation
 
 Status values: COMPLIANT, NOT_COMPLIANT, NOT_APPLICABLE, NOT_TESTED
+
+Before evaluating a criterion, call get_rgaa_criterion to read its wording and its tests: it is what lets you judge rather than guess.
 
 Describing a non-compliance: the details live in notCompliantItems, one entry per issue found, each with its own title, comment, userImpact (MINOR | MAJOR | BLOCKING) and quickWin. The API requires this array on EVERY item — send [] when there is nothing to report. Ara counts an audit as having blocking issues by looking at the userImpact of these entries, not of the criterion.`,
     inputSchema: z.object({

@@ -4,7 +4,7 @@ Serveur MCP (Model Context Protocol) qui expose les opérations CRUD sur les aud
 
 > **Projet communautaire, non officiel.** Ce serveur est un client tiers de l'API d'[Ara](https://github.com/DISIC/Ara), le service d'audit d'accessibilité de la DINUM. Il n'est ni édité ni maintenu par la DINUM.
 
-> **English** — An MCP server for [Ara](https://ara.numerique.gouv.fr), the French government platform for RGAA 4.1 accessibility audits. It exposes 13 tools to create, fill in, publish and export accessibility audits from any MCP client. Requires an account on ara.numerique.gouv.fr. Documentation is in French, matching the audience of the RGAA. Unofficial community project.
+> **English** — An MCP server for [Ara](https://ara.numerique.gouv.fr), the French government platform for RGAA 4.1 accessibility audits. It exposes 15 tools to create, fill in, publish and export accessibility audits from any MCP client. Requires an account on ara.numerique.gouv.fr. Documentation is in French, matching the audience of the RGAA. Unofficial community project.
 
 ## Installation
 
@@ -49,6 +49,8 @@ Chaque outil porte des **annotations** (`readOnlyHint`, `destructiveHint`, `idem
 
 | Outil | Nature | Description |
 |-------|--------|-------------|
+| `list_rgaa_criteria` | 📖 référentiel | Index des critères RGAA (numéro + intitulé), filtrable |
+| `get_rgaa_criterion` | 📖 référentiel | Un critère **et ses tests** — ce qu'il faut lire pour évaluer |
 | `auth_refresh` | ↻ | Rejoue l'authentification depuis l'environnement |
 | `create_audit` | ✚ additif | Créer un nouvel audit |
 | `duplicate_audit` | ✚ additif | Dupliquer un audit (la source n'est pas touchée) |
@@ -62,6 +64,22 @@ Chaque outil porte des **annotations** (`readOnlyHint`, `destructiveHint`, `idem
 | `update_statement` | ⚠️ destructif | **Remplace ET publie** la déclaration d'accessibilité |
 | `publish_audit` | ⚠️ destructif | **Rend l'audit public — irréversible** (voir ci-dessous) |
 | `delete_audit` | ⚠️ destructif | Suppression (410 ensuite) — **ne dépublie pas** |
+
+## Le référentiel RGAA embarqué
+
+Le serveur embarque le **référentiel RGAA 4.1 complet** — 13 thématiques, 106 critères, et les **tests** de chacun. Sans lui, un agent ne manipule que des numéros (`topic: 6, criterium: 1`) sans savoir ce qu'il évalue.
+
+```
+list_rgaa_criteria(auditType: "FAST")   → les 25 critères de l'audit rapide (~5 Ko)
+get_rgaa_criterion(topic: 6, criterium: 1)
+  → « Chaque lien est-il explicite (hors cas particuliers) ? » + ses 5 tests (~2 Ko)
+```
+
+Le geste attendu pendant un audit : `get_rgaa_criterion` pour lire le critère et ses tests, puis `update_audit_results` pour poser le verdict. Juger plutôt que deviner.
+
+Les données proviennent de [`rgaa.json`](https://github.com/DISIC/Ara/blob/main/confiture-rest-api/src/rgaa.json) du projet Ara, publié par la **DINUM** sous **[Licence Ouverte 2.0](https://github.com/DISIC/Ara/blob/main/LICENCES.md)**. Elles sont embarquées dans le paquet — le serveur fonctionne donc hors ligne, sans appel réseau pour la partie référentiel. Régénération : `node scripts/build-rgaa-data.mjs`.
+
+> À noter : les types d'audit `FAST` et `COMPLEMENTARY` couvrent **25 critères chacun** et sont **disjoints** ; c'est la méthodologie complète (rapide + complémentaire) qui en couvre 50.
 
 ## ⚠️ Publier est irréversible
 
@@ -101,13 +119,15 @@ Corrigé au passage : `signin` envoyait l'en-tête `Authorization` avec le jeton
 ## Workflow typique
 
 ```
-1. create_audit(FULL, "MonSite", pages...)   # Créer l'audit
-2. get_audit(editUniqueId)                   # Vérifier les pages et IDs
-3. update_audit_results(editUniqueId, [...]) # Remplir les critères RGAA
-4. get_audit_results(editUniqueId)           # Vérifier les résultats
-5. update_statement(editUniqueId, ...)       # Remplir la déclaration
-6. publish_audit(editUniqueId)               # Publier l'audit terminé
-7. get_report(consultUniqueId)               # Consulter le rapport final
+1. list_rgaa_criteria(auditType: "FAST")     # Savoir ce que l'audit couvre
+2. create_audit(FAST, "MonSite", pages...)   # Créer l'audit
+3. get_audit(editUniqueId)                   # Vérifier les pages et IDs
+4. get_rgaa_criterion(topic, criterium)      # Lire le critère et ses tests
+5. update_audit_results(editUniqueId, [...]) # Poser le verdict
+6. get_audit_results(editUniqueId)           # Vérifier les résultats
+7. update_statement(editUniqueId, ...)       # Remplir la déclaration
+8. publish_audit(editUniqueId)               # Publier l'audit terminé
+9. get_report(consultUniqueId)               # Consulter le rapport final
 ```
 
 L'authentification est faite au démarrage du serveur depuis l'environnement : aucune étape de login dans le workflow.
@@ -205,6 +225,8 @@ Pour brancher la copie locale sur un client MCP, pointer `command` sur `node` et
 
 ## Licence
 
-[EUPL-1.2](LICENSE) — Licence Publique de l'Union Européenne.
+[EUPL-1.2](LICENSE) — Licence Publique de l'Union Européenne, pour le code de ce dépôt.
+
+Le référentiel RGAA embarqué (`src/rgaa-data.ts`) est extrait du projet [Ara](https://github.com/DISIC/Ara) et reste sous **Licence Ouverte 2.0** — Direction interministérielle du numérique (DINUM).
 
 Ce serveur est un projet indépendant : il consomme l'API d'[Ara](https://github.com/DISIC/Ara) sans en reprendre le code. Ara est publié par la DINUM sous [licence MIT](https://github.com/DISIC/Ara/blob/main/LICENCES.md), qui n'impose aucune contrainte sur la licence de ce dépôt.
