@@ -27,7 +27,7 @@ import { AraClient } from "./ara-client.js";
 // ─── Configuration ────────────────────────────────────────
 
 /** Keep in sync with the "version" field of package.json. */
-const SERVER_VERSION = "1.1.0";
+const SERVER_VERSION = "2.0.0";
 
 const ARA_BASE_URL =
   process.env.ARA_BASE_URL || "https://ara.numerique.gouv.fr/api";

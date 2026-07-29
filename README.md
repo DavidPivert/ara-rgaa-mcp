@@ -64,6 +64,16 @@ Chaque outil porte des **annotations** (`readOnlyHint`, `destructiveHint`, `idem
 | `publish_audit` | ⚠️ destructif | **Rend l'audit public** — à confirmer avec l'utilisateur |
 | `delete_audit` | ⚠️ destructif | Suppression (soft delete, 410 ensuite) |
 
+## Migration depuis la 1.x
+
+La 2.0 supprime l'outil **`auth_signin`**, qui recevait l'e-mail et le mot de passe en paramètres — donc à travers le contexte du modèle.
+
+- Retirez tout appel à `auth_signin` de vos scripts ou prompts.
+- Mettez vos identifiants dans le bloc `env` de la configuration MCP (voir [Authentification](#authentification)) : le serveur s'authentifie tout seul au démarrage.
+- `auth_refresh`, sans argument, remplace le besoin d'une reconnexion manuelle en cours de session.
+
+Corrigé au passage : `signin` envoyait l'en-tête `Authorization` avec le jeton courant, ce qui faisait répondre `404 Cannot POST /api/auth/signin` à l'API dès que ce jeton était expiré — précisément le cas où l'on cherche à se reconnecter.
+
 ## Workflow typique
 
 ```
