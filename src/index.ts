@@ -26,7 +26,7 @@ import { AraClient } from "./ara-client.js";
 // ─── Configuration ────────────────────────────────────────
 
 /** Keep in sync with the "version" field of package.json. */
-const SERVER_VERSION = "2.1.1";
+const SERVER_VERSION = "2.1.2";
 
 const ARA_BASE_URL =
   process.env.ARA_BASE_URL || "https://ara.numerique.gouv.fr/api";
@@ -611,31 +611,13 @@ Describing a non-compliance: the details live in notCompliantItems, one entry pe
   }
 );
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  TOOL: get_page_results
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-server.registerTool(
-  "get_page_results",
-  {
-    title: "Get results for one page",
-    description:
-      "Get criterion results for a specific page of an audit. The pageSlug is typically the page order number.",
-    inputSchema: z.object({
-          uniqueId: z.string().describe("The editUniqueId of the audit"),
-          pageSlug: z.string().describe("The page slug (usually its order number)"),
-        }),
-    annotations: READ_ONLY,
-  },
-  async ({ uniqueId, pageSlug }) => {
-    try {
-      const page = await client.getPageResults(uniqueId, pageSlug);
-      return textResult(page);
-    } catch (err) {
-      return errorResult(err);
-    }
-  }
-);
+// NOTE: there is no get_page_results tool.
+//
+// `GET /audits/:uniqueId/pages/:pageSlug` exists, but it matches on the page's
+// `slug` column — a per-audit unique value that no API response ever returns.
+// Neither the page order nor the page id resolves it, so a caller has no way
+// to obtain one. Use get_audit_results and filter on pageId instead: it
+// returns every page's results, and get_audit maps pageId to a page name.
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  TOOL: get_report
@@ -673,7 +655,7 @@ server.registerTool(
   {
     title: "Update the accessibility statement",
     description:
-      "Update the accessibility statement (déclaration d'accessibilité) for an audit. This is used to generate the public accessibility statement, and REPLACES the current statement fields.",
+      "Update the accessibility statement (déclaration d'accessibilité) for an audit, REPLACING the current statement fields. This also PUBLISHES the statement: after the call the audit carries a statementPublicationDate and the déclaration is available at its public consultation URL — confirm with the user before calling it. Publishing the statement is separate from publish_audit, which publishes the audit report.",
     inputSchema: z.object({
           editUniqueId: z.string().describe("The editUniqueId of the audit"),
           initiator: z

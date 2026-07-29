@@ -4,7 +4,7 @@ Serveur MCP (Model Context Protocol) qui expose les opérations CRUD sur les aud
 
 > **Projet communautaire, non officiel.** Ce serveur est un client tiers de l'API d'[Ara](https://github.com/DISIC/Ara), le service d'audit d'accessibilité de la DINUM. Il n'est ni édité ni maintenu par la DINUM.
 
-> **English** — An MCP server for [Ara](https://ara.numerique.gouv.fr), the French government platform for RGAA 4.1 accessibility audits. It exposes 14 tools to create, fill in, publish and export accessibility audits from any MCP client. Requires an account on ara.numerique.gouv.fr. Documentation is in French, matching the audience of the RGAA. Unofficial community project.
+> **English** — An MCP server for [Ara](https://ara.numerique.gouv.fr), the French government platform for RGAA 4.1 accessibility audits. It exposes 13 tools to create, fill in, publish and export accessibility audits from any MCP client. Requires an account on ara.numerique.gouv.fr. Documentation is in French, matching the audience of the RGAA. Unofficial community project.
 
 ## Installation
 
@@ -54,13 +54,12 @@ Chaque outil porte des **annotations** (`readOnlyHint`, `destructiveHint`, `idem
 | `duplicate_audit` | ✚ additif | Dupliquer un audit (la source n'est pas touchée) |
 | `get_audit` | 🔒 lecture seule | Récupérer un audit complet |
 | `get_audit_results` | 🔒 lecture seule | Tous les résultats de critères |
-| `get_page_results` | 🔒 lecture seule | Résultats d'une page |
 | `get_report` | 🔒 lecture seule | Rapport complet avec taux de conformité |
 | `export_csv` | 🔒 lecture seule | Export CSV des résultats |
 | `update_audit` | ⚠️ destructif | Mise à jour complète — **remplace** les métadonnées |
 | `patch_audit_notes` | ⚠️ destructif | **Remplace** les notes de l'audit |
 | `update_audit_results` | ⚠️ destructif | **Remplace** l'évaluation des critères visés |
-| `update_statement` | ⚠️ destructif | **Remplace** la déclaration d'accessibilité |
+| `update_statement` | ⚠️ destructif | **Remplace ET publie** la déclaration d'accessibilité |
 | `publish_audit` | ⚠️ destructif | **Rend l'audit public** — à confirmer avec l'utilisateur |
 | `delete_audit` | ⚠️ destructif | Suppression (soft delete, 410 ensuite) |
 
@@ -145,7 +144,6 @@ L'authentification est faite au démarrage du serveur depuis l'environnement : a
 | `PUT` | `/audits/:uniqueId/publish` | `publish_audit` |
 | `GET` | `/audits/:uniqueId/results` | `get_audit_results` |
 | `PATCH` | `/audits/:uniqueId/results` | `update_audit_results` |
-| `GET` | `/audits/:uniqueId/pages/:slug` | `get_page_results` |
 | `GET` | `/audits/:uniqueId/exports/csv` | `export_csv` |
 | `PUT` | `/audits/:editUniqueId/statement` | `update_statement` |
 
@@ -165,6 +163,7 @@ L'authentification est faite au démarrage du serveur depuis l'environnement : a
 
 | Route | Raison |
 |-------|--------|
+| `GET /audits/:id/pages/:slug` | Le `slug` est une colonne unique par audit qu'**aucune réponse d'API ne renvoie** — ni l'ordre ni l'identifiant de page ne la résolvent. Utiliser `get_audit_results` et filtrer sur `pageId` |
 | `POST /audits/:id/results/examples` | Upload d'image (deprecated) |
 | `POST /audits/:id/notes/files` | Upload de fichier |
 | `POST /audits/editor/images` | Upload d'image éditeur |

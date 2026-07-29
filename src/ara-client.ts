@@ -184,16 +184,9 @@ export class AraClient {
     });
   }
 
-  /** Get results for a specific page of an audit */
-  async getPageResults(
-    uniqueId: string,
-    pageSlug: string
-  ): Promise<PageWithResults> {
-    return this.request<PageWithResults>(
-      "GET",
-      `/audits/${uniqueId}/pages/${pageSlug}`
-    );
-  }
+  // No getPageResults: GET /audits/:uniqueId/pages/:pageSlug matches on the
+  // page's `slug` column, which no API response returns — see the note in
+  // index.ts. Use getResults() and filter on pageId.
 
   // ─── Reports (read-only, by consultUniqueId) ────────────
 
@@ -380,12 +373,6 @@ export interface CriterionResult {
   topic: number;
   criterium: number;
   pageId: number;
-}
-
-export interface PageWithResults {
-  id: number;
-  name: string;
-  results: CriterionResult[];
 }
 
 export interface AuditReport {
