@@ -1,16 +1,52 @@
 {
-  "name": "ara-mcp-server",
-  "version": "1.0.0",
-  "description": "MCP Server for Ara RGAA accessibility audit management",
+  "name": "ara-rgaa-mcp",
+  "version": "1.1.0",
+  "description": "Serveur MCP pour Ara — audits d'accessibilité RGAA 4.1 / MCP server for Ara, the French government RGAA 4.1 accessibility audit platform",
   "license": "EUPL-1.2",
+  "author": "David Pivert",
   "type": "module",
   "bin": {
-    "ara-mcp": "./build/index.js"
+    "ara-rgaa-mcp": "./build/index.js"
+  },
+  "main": "./build/index.js",
+  "files": [
+    "build",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DavidPivert/ara-rgaa-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/DavidPivert/ara-rgaa-mcp/issues"
+  },
+  "homepage": "https://github.com/DavidPivert/ara-rgaa-mcp#readme",
+  "keywords": [
+    "mcp",
+    "modelcontextprotocol",
+    "model-context-protocol",
+    "rgaa",
+    "accessibility",
+    "accessibilite",
+    "a11y",
+    "wcag",
+    "ara",
+    "audit",
+    "claude"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc",
     "start": "node build/index.js",
-    "dev": "npx tsx src/index.ts"
+    "dev": "npx tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",

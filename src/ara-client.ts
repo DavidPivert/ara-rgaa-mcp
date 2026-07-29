@@ -78,6 +78,11 @@ export class AraClient {
     this.authToken = token;
   }
 
+  /** Whether a token is currently held. Never exposes the token itself. */
+  isAuthenticated(): boolean {
+    return Boolean(this.authToken);
+  }
+
   // ─── Audits — CRUD ─────────────────────────────────────
 
   /** Create a new audit */

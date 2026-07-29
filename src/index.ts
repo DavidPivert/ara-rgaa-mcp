@@ -7,11 +7,16 @@
  * Ara RGAA accessibility audits. Designed to be used with Claude Code,
  * Codex, or any MCP-compatible AI client.
  *
+ * Credentials are NEVER accepted as tool arguments: they would transit
+ * through the model's context and be persisted in conversation transcripts.
+ * They are read from the process environment only, which the MCP client
+ * populates from its own configuration file.
+ *
  * Environment variables:
- *   ARA_BASE_URL  — Base URL of the Ara API (default: https://ara.numerique.gouv.fr/api)
- *   ARA_AUTH_TOKEN — Optional pre-configured Bearer token
- *   ARA_USERNAME   — Optional username for auto-login
- *   ARA_PASSWORD   — Optional password for auto-login
+ *   ARA_BASE_URL   — Base URL of the Ara API (default: https://ara.numerique.gouv.fr/api)
+ *   ARA_AUTH_TOKEN — Pre-issued Bearer token (recommended)
+ *   ARA_USERNAME   — Account email, used for auto-login at startup
+ *   ARA_PASSWORD   — Account password, used for auto-login at startup
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -20,6 +25,9 @@ import { z } from "zod";
 import { AraClient } from "./ara-client.js";
 
 // ─── Configuration ────────────────────────────────────────
+
+/** Keep in sync with the "version" field of package.json. */
+const SERVER_VERSION = "1.1.0";
 
 const ARA_BASE_URL =
   process.env.ARA_BASE_URL || "https://ara.numerique.gouv.fr/api";
@@ -33,10 +41,10 @@ const client = new AraClient({
 
 const server = new McpServer({
   name: "ara-rgaa-audits",
-  version: "1.0.0",
+  version: SERVER_VERSION,
 });
 
-// ─── Helper ───────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────
 
 function textResult(data: unknown) {
   return {
@@ -57,25 +65,90 @@ function errorResult(err: unknown) {
   };
 }
 
+/**
+ * Annotation presets.
+ *
+ * `openWorldHint` is true everywhere: every tool talks to the remote Ara API.
+ * `destructiveHint` marks the tools that overwrite or remove existing data —
+ * this is how an MCP client knows it should ask the user for confirmation
+ * before letting an agent run them.
+ */
+const READ_ONLY = {
+  readOnlyHint: true,
+  openWorldHint: true,
+} as const;
+
+const ADDITIVE = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: true,
+} as const;
+
+const DESTRUCTIVE = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const;
+
+// ─── Authentication (environment only) ────────────────────
+
+/**
+ * Authenticate from the process environment.
+ * Returns a human-readable status string; never returns or logs the token.
+ */
+async function authenticateFromEnv(): Promise<string> {
+  if (process.env.ARA_AUTH_TOKEN) {
+    client.setAuthToken(process.env.ARA_AUTH_TOKEN);
+    return "Using the static token from ARA_AUTH_TOKEN. Nothing to refresh.";
+  }
+
+  const username = process.env.ARA_USERNAME;
+  const password = process.env.ARA_PASSWORD;
+
+  if (!username || !password) {
+    throw new Error(
+      "No credentials configured. Set ARA_AUTH_TOKEN (recommended), or " +
+        "ARA_USERNAME and ARA_PASSWORD, in the `env` block of this server's " +
+        "entry in your MCP client configuration. Credentials are never " +
+        "accepted as tool arguments."
+    );
+  }
+
+  const token = await client.signin(username, password);
+  client.setAuthToken(token);
+  return "Re-authenticated from ARA_USERNAME / ARA_PASSWORD. Token refreshed.";
+}
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  TOOL: auth_signin
+//  TOOL: auth_refresh
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-server.tool(
-  "auth_signin",
-  "Authenticate to the Ara platform using email/password. Returns a JWT token that will be used for all subsequent requests. Required only if ARA_AUTH_TOKEN is not set.",
+server.registerTool(
+  "auth_refresh",
   {
-    username: z.string().describe("Your Ara account email"),
-    password: z.string().describe("Your Ara account password"),
+    title: "Refresh the Ara session",
+    description: `Re-authenticate against Ara using the credentials configured in this server's environment, and report the current authentication state.
+
+Takes no arguments on purpose: credentials must never be passed as tool arguments, because tool arguments transit through the model's context and are persisted in conversation transcripts.
+
+Configure them in the \`env\` block of your MCP client configuration:
+- ARA_AUTH_TOKEN — a pre-issued Bearer token (recommended)
+- ARA_USERNAME + ARA_PASSWORD — used to sign in automatically at startup
+
+Use this tool only when a call has failed with an expired-token error.`,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
   },
-  async ({ username, password }) => {
+  async () => {
     try {
-      const token = await client.signin(username, password);
-      client.setAuthToken(token);
-      return textResult({
-        success: true,
-        message: "Authenticated successfully. Token is now active for all subsequent calls.",
-      });
+      const message = await authenticateFromEnv();
+      return textResult({ authenticated: client.isAuthenticated(), message });
     } catch (err) {
       return errorResult(err);
     }
@@ -86,35 +159,41 @@ server.tool(
 //  TOOL: create_audit
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-server.tool(
+server.registerTool(
   "create_audit",
-  `Create a new RGAA accessibility audit in Ara. Returns the audit with its editUniqueId (for editing) and consultUniqueId (for viewing the report).
+  {
+    title: "Create an RGAA audit",
+    description: `Create a new RGAA accessibility audit in Ara. Returns the audit with its editUniqueId (for editing) and consultUniqueId (for viewing the report).
 
 Audit types:
 - FULL: all 106 RGAA criteria
 - FAST: 25 key criteria (audit rapide)
 - COMPLEMENTARY: 50 criteria (audit complémentaire)`,
-  {
-    auditType: z.enum(["FULL", "FAST", "COMPLEMENTARY"]).describe("Type of RGAA audit"),
-    procedureName: z.string().describe("Name of the audited procedure/site"),
-    pages: z
-      .array(
-        z.object({
-          name: z.string().describe("Page name (e.g. 'Page d'accueil')"),
-          url: z.string().describe("Page URL"),
+    inputSchema: {
+      auditType: z
+        .enum(["FULL", "FAST", "COMPLEMENTARY"])
+        .describe("Type of RGAA audit"),
+      procedureName: z.string().describe("Name of the audited procedure/site"),
+      pages: z
+        .array(
+          z.object({
+            name: z.string().describe("Page name (e.g. 'Page d'accueil')"),
+            url: z.string().describe("Page URL"),
+          })
+        )
+        .describe("List of pages to audit"),
+      auditorName: z.string().describe("Name of the auditor"),
+      auditorEmail: z.string().optional().describe("Email of the auditor"),
+      pageElements: z
+        .object({
+          multimedia: z.boolean().describe("Site contains multimedia elements"),
+          form: z.boolean().describe("Site contains form elements"),
+          table: z.boolean().describe("Site contains data tables"),
+          frame: z.boolean().describe("Site contains iframes"),
         })
-      )
-      .describe("List of pages to audit"),
-    auditorName: z.string().describe("Name of the auditor"),
-    auditorEmail: z.string().optional().describe("Email of the auditor"),
-    pageElements: z
-      .object({
-        multimedia: z.boolean().describe("Site contains multimedia elements"),
-        form: z.boolean().describe("Site contains form elements"),
-        table: z.boolean().describe("Site contains data tables"),
-        frame: z.boolean().describe("Site contains iframes"),
-      })
-      .describe("Types of elements present on the site"),
+        .describe("Types of elements present on the site"),
+    },
+    annotations: ADDITIVE,
   },
   async (args) => {
     try {
@@ -137,11 +216,16 @@ Audit types:
 //  TOOL: get_audit
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-server.tool(
+server.registerTool(
   "get_audit",
-  "Retrieve a full audit by its editUniqueId. Returns all metadata, pages, environments, and notes.",
   {
-    uniqueId: z.string().describe("The editUniqueId of the audit"),
+    title: "Get an audit",
+    description:
+      "Retrieve a full audit by its editUniqueId. Returns all metadata, pages, environments, and notes.",
+    inputSchema: {
+      uniqueId: z.string().describe("The editUniqueId of the audit"),
+    },
+    annotations: READ_ONLY,
   },
   async ({ uniqueId }) => {
     try {
@@ -157,46 +241,84 @@ server.tool(
 //  TOOL: update_audit
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-server.tool(
+server.registerTool(
   "update_audit",
-  "Full update of an audit's metadata (procedure info, auditor info, environments, tools, technologies, notes, etc.).",
   {
-    uniqueId: z.string().describe("The editUniqueId of the audit"),
-    auditType: z.enum(["FULL", "FAST", "COMPLEMENTARY"]),
-    procedureName: z.string(),
-    pages: z.array(
-      z.object({
-        id: z.number().optional().describe("Page ID (include to update existing page)"),
-        name: z.string(),
-        url: z.string(),
-      })
-    ),
-    auditorName: z.string(),
-    auditorEmail: z.string().optional(),
-    procedureUrl: z.string().optional().describe("URL of the audited site"),
-    initiator: z.string().optional().describe("Organisation requesting the audit"),
-    auditorOrganisation: z.string().optional(),
-    contactName: z.string().optional().describe("Accessibility contact name"),
-    contactEmail: z.string().optional().describe("Accessibility contact email"),
-    contactFormUrl: z.string().optional().describe("URL of accessibility contact form"),
-    tools: z.array(z.string()).optional().describe("Audit tools used (e.g. ['Axe', 'WAVE'])"),
-    environments: z
-      .array(
+    title: "Update an audit (full replace)",
+    description:
+      "Full update of an audit's metadata (procedure info, auditor info, environments, tools, technologies, notes, etc.). This REPLACES the existing metadata: fetch the audit with get_audit first and resend the fields you want to keep.",
+    inputSchema: {
+      uniqueId: z.string().describe("The editUniqueId of the audit"),
+      auditType: z.enum(["FULL", "FAST", "COMPLEMENTARY"]),
+      procedureName: z.string(),
+      pages: z.array(
         z.object({
-          platform: z.string().describe("e.g. 'Desktop' or 'Mobile'"),
-          operatingSystem: z.string().describe("e.g. 'Windows', 'macOS'"),
-          assistiveTechnology: z.string().describe("e.g. 'JAWS', 'NVDA', 'VoiceOver'"),
-          browser: z.string().describe("e.g. 'Firefox', 'Chrome'"),
+          id: z
+            .number()
+            .optional()
+            .describe("Page ID (include to update existing page)"),
+          name: z.string(),
+          url: z.string(),
         })
-      )
-      .optional()
-      .describe("Test environments used"),
-    technologies: z.array(z.string()).optional().describe("Technologies used on the site (e.g. ['HTML', 'CSS', 'JavaScript'])"),
-    notCompliantContent: z.string().optional().describe("Description of non-compliant content"),
-    derogatedContent: z.string().optional().describe("Description of derogated content"),
-    notInScopeContent: z.string().optional().describe("Description of content not in scope"),
-    notes: z.string().optional().describe("General audit notes (rich text)"),
-    transverseElements: z.string().array().optional().describe("Transverse elements (e.g. ['En-tête', 'Pied de page'])"),
+      ),
+      auditorName: z.string(),
+      auditorEmail: z.string().optional(),
+      procedureUrl: z.string().optional().describe("URL of the audited site"),
+      initiator: z
+        .string()
+        .optional()
+        .describe("Organisation requesting the audit"),
+      auditorOrganisation: z.string().optional(),
+      contactName: z.string().optional().describe("Accessibility contact name"),
+      contactEmail: z
+        .string()
+        .optional()
+        .describe("Accessibility contact email"),
+      contactFormUrl: z
+        .string()
+        .optional()
+        .describe("URL of accessibility contact form"),
+      tools: z
+        .array(z.string())
+        .optional()
+        .describe("Audit tools used (e.g. ['Axe', 'WAVE'])"),
+      environments: z
+        .array(
+          z.object({
+            platform: z.string().describe("e.g. 'Desktop' or 'Mobile'"),
+            operatingSystem: z.string().describe("e.g. 'Windows', 'macOS'"),
+            assistiveTechnology: z
+              .string()
+              .describe("e.g. 'JAWS', 'NVDA', 'VoiceOver'"),
+            browser: z.string().describe("e.g. 'Firefox', 'Chrome'"),
+          })
+        )
+        .optional()
+        .describe("Test environments used"),
+      technologies: z
+        .array(z.string())
+        .optional()
+        .describe("Technologies used on the site (e.g. ['HTML', 'CSS', 'JavaScript'])"),
+      notCompliantContent: z
+        .string()
+        .optional()
+        .describe("Description of non-compliant content"),
+      derogatedContent: z
+        .string()
+        .optional()
+        .describe("Description of derogated content"),
+      notInScopeContent: z
+        .string()
+        .optional()
+        .describe("Description of content not in scope"),
+      notes: z.string().optional().describe("General audit notes (rich text)"),
+      transverseElements: z
+        .string()
+        .array()
+        .optional()
+        .describe("Transverse elements (e.g. ['En-tête', 'Pied de page'])"),
+    },
+    annotations: DESTRUCTIVE,
   },
   async ({ uniqueId, ...data }) => {
     try {
@@ -216,12 +338,17 @@ server.tool(
 //  TOOL: patch_audit_notes
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-server.tool(
+server.registerTool(
   "patch_audit_notes",
-  "Update only the notes field of an audit. Useful for adding audit observations without touching other metadata.",
   {
-    uniqueId: z.string().describe("The editUniqueId of the audit"),
-    notes: z.string().describe("New notes content (rich text / HTML)"),
+    title: "Replace the audit notes",
+    description:
+      "Update only the notes field of an audit, without touching other metadata. The new content REPLACES the existing notes.",
+    inputSchema: {
+      uniqueId: z.string().describe("The editUniqueId of the audit"),
+      notes: z.string().describe("New notes content (rich text / HTML)"),
+    },
+    annotations: DESTRUCTIVE,
   },
   async ({ uniqueId, notes }) => {
     try {
@@ -237,11 +364,16 @@ server.tool(
 //  TOOL: delete_audit
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-server.tool(
+server.registerTool(
   "delete_audit",
-  "Soft-delete an audit. The audit will return HTTP 410 Gone for future requests.",
   {
-    uniqueId: z.string().describe("The editUniqueId of the audit to delete"),
+    title: "Delete an audit",
+    description:
+      "Soft-delete an audit. The audit will return HTTP 410 Gone for future requests. This cannot be undone from this server.",
+    inputSchema: {
+      uniqueId: z.string().describe("The editUniqueId of the audit to delete"),
+    },
+    annotations: DESTRUCTIVE,
   },
   async ({ uniqueId }) => {
     try {
@@ -257,12 +389,19 @@ server.tool(
 //  TOOL: duplicate_audit
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-server.tool(
+server.registerTool(
   "duplicate_audit",
-  "Fully duplicate an existing audit (metadata, pages, RGAA results, example images). Returns a new audit with fresh IDs.",
   {
-    uniqueId: z.string().describe("The editUniqueId of the audit to duplicate"),
-    procedureName: z.string().describe("Name for the duplicated audit"),
+    title: "Duplicate an audit",
+    description:
+      "Fully duplicate an existing audit (metadata, pages, RGAA results, example images). Returns a new audit with fresh IDs. The source audit is left untouched.",
+    inputSchema: {
+      uniqueId: z
+        .string()
+        .describe("The editUniqueId of the audit to duplicate"),
+      procedureName: z.string().describe("Name for the duplicated audit"),
+    },
+    annotations: ADDITIVE,
   },
   async ({ uniqueId, procedureName }) => {
     try {
@@ -283,11 +422,16 @@ server.tool(
 //  TOOL: publish_audit
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-server.tool(
+server.registerTool(
   "publish_audit",
-  "Mark an audit as published/completed. The audit must be fully filled in (all criteria evaluated) before publishing. Returns HTTP 409 if incomplete.",
   {
-    uniqueId: z.string().describe("The editUniqueId of the audit to publish"),
+    title: "Publish an audit (public)",
+    description:
+      "Mark an audit as published/completed. This makes the audit report and its accessibility statement PUBLICLY available at their consultation URL — confirm with the user before calling it. The audit must be fully filled in (all criteria evaluated) before publishing. Returns HTTP 409 if incomplete.",
+    inputSchema: {
+      uniqueId: z.string().describe("The editUniqueId of the audit to publish"),
+    },
+    annotations: DESTRUCTIVE,
   },
   async ({ uniqueId }) => {
     try {
@@ -306,9 +450,11 @@ server.tool(
 //  TOOL: get_audit_results
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-server.tool(
+server.registerTool(
   "get_audit_results",
-  `Retrieve all criterion results for an audit. Returns an array of results, each with:
+  {
+    title: "Get all criterion results",
+    description: `Retrieve all criterion results for an audit. Returns an array of results, each with:
 - topic (1-13): RGAA topic number
 - criterium: criterion number within the topic
 - pageId: ID of the audited page
@@ -316,8 +462,10 @@ server.tool(
 - compliantComment / notCompliantComment / notApplicableComment
 - userImpact: MINOR | MAJOR | BLOCKING (when not compliant)
 - quickWin: whether the fix is easy`,
-  {
-    uniqueId: z.string().describe("The editUniqueId of the audit"),
+    inputSchema: {
+      uniqueId: z.string().describe("The editUniqueId of the audit"),
+    },
+    annotations: READ_ONLY,
   },
   async ({ uniqueId }) => {
     try {
@@ -333,10 +481,12 @@ server.tool(
 //  TOOL: update_audit_results
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-server.tool(
+server.registerTool(
   "update_audit_results",
-  `Update criterion results for an audit. Send an array of result items.
-Each item targets one criterion on one page using (pageId, topic, criterium).
+  {
+    title: "Update criterion results",
+    description: `Update criterion results for an audit. Send an array of result items.
+Each item targets one criterion on one page using (pageId, topic, criterium), and REPLACES the previous evaluation of that criterion.
 
 The topic/criterium must be a valid RGAA combination. Topics 1-13:
 1. Images, 2. Cadres, 3. Couleurs, 4. Multimédia, 5. Tableaux,
@@ -345,47 +495,54 @@ The topic/criterium must be a valid RGAA combination. Topics 1-13:
 
 Status values: COMPLIANT, NOT_COMPLIANT, NOT_APPLICABLE, NOT_TESTED
 User impact values: MINOR, MAJOR, BLOCKING`,
-  {
-    uniqueId: z.string().describe("The editUniqueId of the audit"),
-    results: z
-      .array(
-        z.object({
-          pageId: z.number().describe("ID of the page being evaluated"),
-          topic: z
-            .number()
-            .min(1)
-            .max(13)
-            .describe("RGAA topic number (1-13)"),
-          criterium: z
-            .number()
-            .min(1)
-            .describe("Criterion number within the topic"),
-          status: z
-            .enum(["COMPLIANT", "NOT_COMPLIANT", "NOT_APPLICABLE", "NOT_TESTED"])
-            .describe("Evaluation result"),
-          compliantComment: z
-            .string()
-            .optional()
-            .describe("Comment when criterion is compliant"),
-          notCompliantComment: z
-            .string()
-            .optional()
-            .describe("Description of the non-compliance issue"),
-          userImpact: z
-            .enum(["MINOR", "MAJOR", "BLOCKING"])
-            .optional()
-            .describe("User impact level when not compliant"),
-          quickWin: z
-            .boolean()
-            .optional()
-            .describe("Whether this is easy to fix"),
-          notApplicableComment: z
-            .string()
-            .optional()
-            .describe("Comment when criterion is not applicable"),
-        })
-      )
-      .describe("Array of criterion results to update"),
+    inputSchema: {
+      uniqueId: z.string().describe("The editUniqueId of the audit"),
+      results: z
+        .array(
+          z.object({
+            pageId: z.number().describe("ID of the page being evaluated"),
+            topic: z
+              .number()
+              .min(1)
+              .max(13)
+              .describe("RGAA topic number (1-13)"),
+            criterium: z
+              .number()
+              .min(1)
+              .describe("Criterion number within the topic"),
+            status: z
+              .enum([
+                "COMPLIANT",
+                "NOT_COMPLIANT",
+                "NOT_APPLICABLE",
+                "NOT_TESTED",
+              ])
+              .describe("Evaluation result"),
+            compliantComment: z
+              .string()
+              .optional()
+              .describe("Comment when criterion is compliant"),
+            notCompliantComment: z
+              .string()
+              .optional()
+              .describe("Description of the non-compliance issue"),
+            userImpact: z
+              .enum(["MINOR", "MAJOR", "BLOCKING"])
+              .optional()
+              .describe("User impact level when not compliant"),
+            quickWin: z
+              .boolean()
+              .optional()
+              .describe("Whether this is easy to fix"),
+            notApplicableComment: z
+              .string()
+              .optional()
+              .describe("Comment when criterion is not applicable"),
+          })
+        )
+        .describe("Array of criterion results to update"),
+    },
+    annotations: DESTRUCTIVE,
   },
   async ({ uniqueId, results }) => {
     try {
@@ -403,12 +560,17 @@ User impact values: MINOR, MAJOR, BLOCKING`,
 //  TOOL: get_page_results
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-server.tool(
+server.registerTool(
   "get_page_results",
-  "Get criterion results for a specific page of an audit. The pageSlug is typically the page order number.",
   {
-    uniqueId: z.string().describe("The editUniqueId of the audit"),
-    pageSlug: z.string().describe("The page slug (usually its order number)"),
+    title: "Get results for one page",
+    description:
+      "Get criterion results for a specific page of an audit. The pageSlug is typically the page order number.",
+    inputSchema: {
+      uniqueId: z.string().describe("The editUniqueId of the audit"),
+      pageSlug: z.string().describe("The page slug (usually its order number)"),
+    },
+    annotations: READ_ONLY,
   },
   async ({ uniqueId, pageSlug }) => {
     try {
@@ -424,13 +586,18 @@ server.tool(
 //  TOOL: get_report
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-server.tool(
+server.registerTool(
   "get_report",
-  "Get the full audit report (read-only). Includes accessibility rate, criteria counts, and result distributions by page and topic. Uses the consultUniqueId (not the editUniqueId).",
   {
-    consultUniqueId: z
-      .string()
-      .describe("The consultUniqueId of the audit (found in the audit data)"),
+    title: "Get the audit report",
+    description:
+      "Get the full audit report (read-only). Includes accessibility rate, criteria counts, and result distributions by page and topic. Uses the consultUniqueId (not the editUniqueId).",
+    inputSchema: {
+      consultUniqueId: z
+        .string()
+        .describe("The consultUniqueId of the audit (found in the audit data)"),
+    },
+    annotations: READ_ONLY,
   },
   async ({ consultUniqueId }) => {
     try {
@@ -446,33 +613,50 @@ server.tool(
 //  TOOL: update_statement
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-server.tool(
+server.registerTool(
   "update_statement",
-  "Update the accessibility statement (déclaration d'accessibilité) for an audit. This is used to generate the public accessibility statement.",
   {
-    editUniqueId: z.string().describe("The editUniqueId of the audit"),
-    initiator: z.string().optional().describe("Organisation requesting the audit"),
-    auditorOrganisation: z.string().optional().describe("Auditing organisation"),
-    procedureUrl: z.string().optional().describe("URL of the audited site"),
-    contactName: z.string().optional().describe("Accessibility contact name"),
-    contactEmail: z.string().optional().describe("Accessibility contact email"),
-    contactFormUrl: z.string().optional().describe("Accessibility contact form URL"),
-    technologies: z.array(z.string()).optional().describe("Technologies used"),
-    tools: z.array(z.string()).optional().describe("Audit tools used"),
-    environments: z
-      .array(
-        z.object({
-          platform: z.string(),
-          operatingSystem: z.string(),
-          assistiveTechnology: z.string(),
-          browser: z.string(),
-        })
-      )
-      .optional()
-      .describe("Test environments"),
-    notCompliantContent: z.string().optional(),
-    derogatedContent: z.string().optional(),
-    notInScopeContent: z.string().optional(),
+    title: "Update the accessibility statement",
+    description:
+      "Update the accessibility statement (déclaration d'accessibilité) for an audit. This is used to generate the public accessibility statement, and REPLACES the current statement fields.",
+    inputSchema: {
+      editUniqueId: z.string().describe("The editUniqueId of the audit"),
+      initiator: z
+        .string()
+        .optional()
+        .describe("Organisation requesting the audit"),
+      auditorOrganisation: z
+        .string()
+        .optional()
+        .describe("Auditing organisation"),
+      procedureUrl: z.string().optional().describe("URL of the audited site"),
+      contactName: z.string().optional().describe("Accessibility contact name"),
+      contactEmail: z
+        .string()
+        .optional()
+        .describe("Accessibility contact email"),
+      contactFormUrl: z
+        .string()
+        .optional()
+        .describe("Accessibility contact form URL"),
+      technologies: z.array(z.string()).optional().describe("Technologies used"),
+      tools: z.array(z.string()).optional().describe("Audit tools used"),
+      environments: z
+        .array(
+          z.object({
+            platform: z.string(),
+            operatingSystem: z.string(),
+            assistiveTechnology: z.string(),
+            browser: z.string(),
+          })
+        )
+        .optional()
+        .describe("Test environments"),
+      notCompliantContent: z.string().optional(),
+      derogatedContent: z.string().optional(),
+      notInScopeContent: z.string().optional(),
+    },
+    annotations: DESTRUCTIVE,
   },
   async ({ editUniqueId, ...data }) => {
     try {
@@ -491,11 +675,15 @@ server.tool(
 //  TOOL: export_csv
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-server.tool(
+server.registerTool(
   "export_csv",
-  "Export audit results in CSV format.",
   {
-    uniqueId: z.string().describe("The editUniqueId of the audit"),
+    title: "Export results as CSV",
+    description: "Export audit results in CSV format.",
+    inputSchema: {
+      uniqueId: z.string().describe("The editUniqueId of the audit"),
+    },
+    annotations: READ_ONLY,
   },
   async ({ uniqueId }) => {
     try {
@@ -510,16 +698,23 @@ server.tool(
 // ─── Auto-login on startup ───────────────────────────────
 
 async function autoLogin() {
-  const username = process.env.ARA_USERNAME;
-  const password = process.env.ARA_PASSWORD;
-  if (username && password && !process.env.ARA_AUTH_TOKEN) {
-    try {
-      const token = await client.signin(username, password);
-      client.setAuthToken(token);
-      console.error("[ara-mcp] Auto-authenticated as", username);
-    } catch (err) {
-      console.error("[ara-mcp] Auto-login failed:", err);
-    }
+  if (process.env.ARA_AUTH_TOKEN) {
+    console.error("[ara-mcp] Using token from ARA_AUTH_TOKEN");
+    return;
+  }
+  if (!process.env.ARA_USERNAME || !process.env.ARA_PASSWORD) {
+    console.error(
+      "[ara-mcp] No credentials in the environment. Set ARA_AUTH_TOKEN " +
+        "(recommended) or ARA_USERNAME / ARA_PASSWORD in your MCP client config."
+    );
+    return;
+  }
+  try {
+    await authenticateFromEnv();
+    console.error("[ara-mcp] Auto-authenticated from ARA_USERNAME");
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[ara-mcp] Auto-login failed:", message);
   }
 }
 
