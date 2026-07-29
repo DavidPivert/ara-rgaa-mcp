@@ -382,6 +382,8 @@ export interface AuditResponse {
   publicationDate: string | null;
   editionDate: string | null;
   pages: PageDto[];
+  /** Page « Éléments transverses », créée d'office par Ara. */
+  transverseElementsPage?: PageDto & { name: string };
 }
 
 export interface CriterionResult {

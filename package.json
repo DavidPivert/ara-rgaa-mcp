@@ -1,7 +1,7 @@
 {
   "name": "ara-rgaa-mcp",
   "mcpName": "io.github.DavidPivert/ara-rgaa-mcp",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "Serveur MCP pour Ara — audits d'accessibilité RGAA 4.1 / MCP server for Ara, the French government RGAA 4.1 accessibility audit platform",
   "license": "EUPL-1.2",
   "author": "David Pivert",

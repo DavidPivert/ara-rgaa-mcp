@@ -41,7 +41,7 @@ import {
 // ─── Configuration ────────────────────────────────────────
 
 /** Keep in sync with the "version" field of package.json. */
-const SERVER_VERSION = "2.4.0";
+const SERVER_VERSION = "2.5.0";
 
 const ARA_BASE_URL =
   process.env.ARA_BASE_URL || "https://ara.numerique.gouv.fr/api";
@@ -746,16 +746,100 @@ server.registerTool(
 - pageId: ID of the audited page
 - status: COMPLIANT | NOT_COMPLIANT | NOT_APPLICABLE | NOT_TESTED
 - compliantComment / notApplicableComment
-- notCompliantItems: the individual issues found, each with title, comment, userImpact (MINOR | MAJOR | BLOCKING) and quickWin`,
+- notCompliantItems: the individual issues found, each with title, comment, userImpact (MINOR | MAJOR | BLOCKING) and quickWin
+
+On a FULL audit this returns 106 criteria per page — hundreds of entries. Filter by pageId or status rather than pulling everything, and call get_audit_progress when all you need is what is left to evaluate.`,
     inputSchema: z.object({
-          uniqueId: z.string().describe("The editUniqueId of the audit"),
-        }),
+      uniqueId: z.string().describe("The editUniqueId of the audit"),
+      pageId: z
+        .number()
+        .optional()
+        .describe("Keep only this page. Page ids come from get_audit."),
+      status: z
+        .enum(["COMPLIANT", "NOT_COMPLIANT", "NOT_APPLICABLE", "NOT_TESTED"])
+        .optional()
+        .describe("Keep only results in this state"),
+    }),
+    annotations: READ_ONLY,
+  },
+  async ({ uniqueId, pageId, status }) => {
+    try {
+      const tous = await client.getResults(uniqueId);
+      if (!pageId && !status) return textResult(tous);
+      const results = tous.filter(
+        (r) => (!pageId || r.pageId === pageId) && (!status || r.status === status)
+      );
+      return textResult({ total: tous.length, retournes: results.length, results });
+    } catch (err) {
+      return errorResult(err);
+    }
+  }
+);
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  TOOL: get_audit_progress
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+server.registerTool(
+  "get_audit_progress",
+  {
+    title: "Avancement d'un audit",
+    description: `Where an audit stands: how many criteria are evaluated on each page, and WHICH ONES ARE LEFT — as a compact list of ids.
+
+Use this instead of get_audit_results whenever the question is "what remains to be done". A FULL audit carries 106 criteria per page, transverse elements included: 212 results for a single page, close to a thousand on an eight-page sample. Pulling all of them back just to spot the gaps wastes the context you need for the audit itself.
+
+Also reports whether the audit can be published — Ara refuses publish_audit while a single criterion is still NOT_TESTED, and this is how you find that one.`,
+    inputSchema: z.object({
+      uniqueId: z.string().describe("The editUniqueId of the audit"),
+    }),
     annotations: READ_ONLY,
   },
   async ({ uniqueId }) => {
     try {
-      const results = await client.getResults(uniqueId);
-      return textResult(results);
+      const [audit, results] = await Promise.all([
+        client.getAudit(uniqueId),
+        client.getResults(uniqueId),
+      ]);
+      const nomDePage = new Map<number, string>();
+      for (const pg of audit.pages) nomDePage.set(pg.id, pg.name);
+      if (audit.transverseElementsPage)
+        nomDePage.set(audit.transverseElementsPage.id, audit.transverseElementsPage.name);
+
+      const parPage = new Map<number, { evalues: number; restants: string[]; parStatut: Record<string, number> }>();
+      for (const r of results) {
+        const e = parPage.get(r.pageId) ?? { evalues: 0, restants: [], parStatut: {} };
+        e.parStatut[r.status] = (e.parStatut[r.status] ?? 0) + 1;
+        if (r.status === "NOT_TESTED") e.restants.push(`${r.topic}.${r.criterium}`);
+        else e.evalues++;
+        parPage.set(r.pageId, e);
+      }
+
+      const pages = [...parPage.entries()].map(([id, e]) => ({
+        pageId: id,
+        nom: nomDePage.get(id) ?? "(page inconnue)",
+        criteres: e.evalues + e.restants.length,
+        evalues: e.evalues,
+        restants: e.restants.length,
+        parStatut: e.parStatut,
+        criteresRestants: e.restants,
+      }));
+
+      const restants = pages.reduce((a, p) => a + p.restants, 0);
+      const total = pages.reduce((a, p) => a + p.criteres, 0);
+      return textResult({
+        auditType: audit.auditType,
+        procedureName: audit.procedureName,
+        total,
+        evalues: total - restants,
+        restants,
+        avancement: total ? Math.round((100 * (total - restants)) / total) + " %" : "—",
+        publiable: restants === 0,
+        note:
+          restants === 0
+            ? "Tous les critères sont évalués : publish_audit acceptera l'audit."
+            : "publish_audit refusera tant qu'un critère reste NOT_TESTED.",
+        pages,
+      });
     } catch (err) {
       return errorResult(err);
     }
@@ -779,6 +863,8 @@ The topic/criterium must be a valid RGAA combination. Topics 1-13:
 10. Présentation, 11. Formulaires, 12. Navigation, 13. Consultation
 
 Status values: COMPLIANT, NOT_COMPLIANT, NOT_APPLICABLE, NOT_TESTED
+
+Working through a FULL audit: 106 criteria on every page, transverse elements included. Send them page by page, or topic by topic — not in one call. Between batches, call get_audit_progress to see what is left rather than re-reading every result.
 
 Before evaluating a criterion, call get_rgaa_criterion to read its wording and its tests: it is what lets you judge rather than guess.
 

@@ -4,7 +4,7 @@ Serveur MCP (Model Context Protocol) qui expose les opérations CRUD sur les aud
 
 > **Projet communautaire, non officiel.** Ce serveur est un client tiers de l'API d'[Ara](https://github.com/DISIC/Ara), le service d'audit d'accessibilité de la DINUM. Il n'est ni édité ni maintenu par la DINUM.
 
-> **English** — An MCP server for [Ara](https://ara.numerique.gouv.fr), the French government platform for RGAA 4.1 accessibility audits. It exposes 16 tools to create, fill in, publish and export accessibility audits from any MCP client. Requires an account on ara.numerique.gouv.fr. Documentation is in French, matching the audience of the RGAA. Unofficial community project.
+> **English** — An MCP server for [Ara](https://ara.numerique.gouv.fr), the French government platform for RGAA 4.1 accessibility audits. It exposes 17 tools to create, fill in, publish and export accessibility audits from any MCP client. Requires an account on ara.numerique.gouv.fr. Documentation is in French, matching the audience of the RGAA. Unofficial community project.
 
 ## Installation
 
@@ -86,7 +86,8 @@ Chaque outil porte des **annotations** (`readOnlyHint`, `destructiveHint`, `idem
 | `create_audit` | ✚ additif | Créer un nouvel audit |
 | `duplicate_audit` | ✚ additif | Dupliquer un audit (la source n'est pas touchée) |
 | `get_audit` | 🔒 lecture seule | Récupérer un audit complet |
-| `get_audit_results` | 🔒 lecture seule | Tous les résultats de critères |
+| `get_audit_progress` | 🔒 lecture seule | **Avancement** : ce qui reste à évaluer, par page |
+| `get_audit_results` | 🔒 lecture seule | Résultats de critères, filtrables par page et par statut |
 | `get_report` | 🔒 lecture seule | Rapport complet avec taux de conformité |
 | `export_csv` | 🔒 lecture seule | Export CSV des résultats |
 | `update_audit` | ⚠️ destructif | Mise à jour complète — **remplace** les métadonnées |
@@ -114,7 +115,7 @@ Les données proviennent de [`rgaa.json`](https://github.com/DISIC/Ara/blob/main
 
 ## Le code source ne suffit pas
 
-Sur les 25 critères d'un audit rapide, **6 seulement se tranchent en lisant le HTML**. Les autres exigent la page rendue, une navigation clavier réelle, l'arbre d'accessibilité, ou un jugement éditorial.
+Sur les 106 critères du RGAA, **40 seulement se tranchent en lisant le HTML** — et 6 sur les 25 d'un audit rapide. Les autres exigent la page rendue, une navigation clavier réelle, l'arbre d'accessibilité, ou un jugement éditorial.
 
 C'est le piège de l'audit assisté par IA : un agent lit du balisage, y trouve des réponses plausibles, et remplit un audit qui ne repose sur rien. Trois mécanismes s'y opposent.
 
@@ -192,16 +193,21 @@ Corrigé au passage : `signin` envoyait l'en-tête `Authorization` avec le jeton
 ## Workflow typique
 
 ```
-1. list_rgaa_criteria(auditType: "FAST")     # Savoir ce que l'audit couvre
-2. create_audit(FAST, "MonSite", pages...)   # Créer l'audit
-3. get_audit(editUniqueId)                   # Vérifier les pages et IDs
+1. get_audit_method("FULL")                  # De quoi aurai-je besoin ?
+2. create_audit(FULL, "MonSite", pages...)   # Créer l'audit (106 critères)
+3. get_audit(editUniqueId)                   # Récupérer les IDs de page
 4. get_rgaa_criterion(topic, criterium)      # Lire le critère et ses tests
-5. update_audit_results(editUniqueId, [...]) # Poser le verdict
-6. get_audit_results(editUniqueId)           # Vérifier les résultats
+5. update_audit_results(...)                 # Poser le verdict, page par page
+6. get_audit_progress(editUniqueId)          # Que reste-t-il ?
+   ↳ revenir en 4 tant qu'il reste des critères
 7. update_statement(editUniqueId, ...)       # Remplir la déclaration
 8. publish_audit(editUniqueId)               # Publier l'audit terminé
 9. get_report(consultUniqueId)               # Consulter le rapport final
 ```
+
+**L'audit complet est le cas normal** : seul un audit sur les 106 critères fonde une déclaration d'accessibilité. `FAST` (25 critères) et `COMPLEMENTARY` (25 autres) servent à repérer, pas à déclarer.
+
+Un audit complet, c'est **106 critères par page, éléments transverses compris** — 318 résultats pour deux pages, près d'un millier sur un échantillon de huit. D'où la boucle 4→6 : évaluer par lots, puis demander ce qu'il reste avec `get_audit_progress` plutôt que de rapatrier tous les résultats.
 
 L'authentification est faite au démarrage du serveur depuis l'environnement : aucune étape de login dans le workflow.
 
