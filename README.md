@@ -181,4 +181,6 @@ Pour brancher la copie locale sur un client MCP, pointer `command` sur `node` et
 
 ## Licence
 
-[EUPL-1.2](LICENSE) — Licence Publique de l'Union Européenne, la licence du projet [Ara](https://github.com/DISIC/Ara) amont.
+[EUPL-1.2](LICENSE) — Licence Publique de l'Union Européenne.
+
+Ce serveur est un projet indépendant : il consomme l'API d'[Ara](https://github.com/DISIC/Ara) sans en reprendre le code. Ara est publié par la DINUM sous [licence MIT](https://github.com/DISIC/Ara/blob/main/LICENCES.md), qui n'impose aucune contrainte sur la licence de ce dépôt.
