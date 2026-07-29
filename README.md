@@ -64,6 +64,15 @@ Chaque outil porte des **annotations** (`readOnlyHint`, `destructiveHint`, `idem
 | `publish_audit` | ⚠️ destructif | **Rend l'audit public** — à confirmer avec l'utilisateur |
 | `delete_audit` | ⚠️ destructif | Suppression (soft delete, 410 ensuite) |
 
+## Révisions de protocole MCP
+
+Depuis la 2.1.0, le serveur sert **les deux révisions de la spécification** depuis le même code, en négociant à l'ouverture de la connexion :
+
+- **`2025-11-25`** — poignée de main `initialize`, comme avant.
+- **`2026-07-28`** — sans état : plus de `initialize`, `server/discover`, `resultType`, et des indices de cache (`ttlMs` / `cacheScope`) sur le catalogue d'outils.
+
+Il n'y a rien à configurer : votre client obtient la révision qu'il sait parler.
+
 ## Migration depuis la 1.x
 
 La 2.0 supprime l'outil **`auth_signin`**, qui recevait l'e-mail et le mot de passe en paramètres — donc à travers le contexte du modèle.

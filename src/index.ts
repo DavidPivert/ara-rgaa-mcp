@@ -18,16 +18,15 @@
  *   ARA_USERNAME   — Account email, used for auto-login at startup
  *   ARA_PASSWORD   — Account password, used for auto-login at startup
  */
-
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
+import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { AraClient } from "./ara-client.js";
 
 // ─── Configuration ────────────────────────────────────────
 
 /** Keep in sync with the "version" field of package.json. */
-const SERVER_VERSION = "2.0.1";
+const SERVER_VERSION = "2.1.0";
 
 const ARA_BASE_URL =
   process.env.ARA_BASE_URL || "https://ara.numerique.gouv.fr/api";
@@ -39,10 +38,33 @@ const client = new AraClient({
 
 // ─── MCP Server ───────────────────────────────────────────
 
-const server = new McpServer({
-  name: "ara-rgaa-audits",
-  version: SERVER_VERSION,
-});
+/**
+ * Build a server instance.
+ *
+ * `serveStdio` takes a factory rather than an instance: it negotiates the
+ * protocol revision when the connection opens, and builds an instance pinned
+ * to the era the client speaks. Tools are declared once and served to both.
+ */
+function buildServer(): McpServer {
+  const server = new McpServer(
+    {
+      name: "ara-rgaa-audits",
+      version: SERVER_VERSION,
+    },
+    {
+      // 2026-07-28 cache hints. The catalogue is static — it is compiled into
+      // the package — so it is safe to cache for a while, and it holds nothing
+      // user-specific, hence `public`. Without this the SDK emits a
+      // conservative `ttlMs: 0, cacheScope: 'private'`, i.e. no caching.
+      cacheHints: {
+        "tools/list": { ttlMs: 3_600_000, cacheScope: "public" },
+        "server/discover": { ttlMs: 3_600_000, cacheScope: "public" },
+      },
+    }
+  );
+  registerAllTools(server);
+  return server;
+}
 
 // ─── Helpers ──────────────────────────────────────────────
 
@@ -132,6 +154,11 @@ async function authenticateFromEnv(preferLogin = false): Promise<string> {
   return "Re-authenticated from ARA_USERNAME / ARA_PASSWORD. Token refreshed.";
 }
 
+// ─── Tools ────────────────────────────────────────────────
+
+/** Declare every tool on a server instance. Called once per instance built. */
+function registerAllTools(server: McpServer): void {
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  TOOL: auth_refresh
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -180,30 +207,30 @@ Audit types:
 - FULL: all 106 RGAA criteria
 - FAST: 25 key criteria (audit rapide)
 - COMPLEMENTARY: 50 criteria (audit complémentaire)`,
-    inputSchema: {
-      auditType: z
-        .enum(["FULL", "FAST", "COMPLEMENTARY"])
-        .describe("Type of RGAA audit"),
-      procedureName: z.string().describe("Name of the audited procedure/site"),
-      pages: z
-        .array(
-          z.object({
-            name: z.string().describe("Page name (e.g. 'Page d'accueil')"),
-            url: z.string().describe("Page URL"),
-          })
-        )
-        .describe("List of pages to audit"),
-      auditorName: z.string().describe("Name of the auditor"),
-      auditorEmail: z.string().optional().describe("Email of the auditor"),
-      pageElements: z
-        .object({
-          multimedia: z.boolean().describe("Site contains multimedia elements"),
-          form: z.boolean().describe("Site contains form elements"),
-          table: z.boolean().describe("Site contains data tables"),
-          frame: z.boolean().describe("Site contains iframes"),
-        })
-        .describe("Types of elements present on the site"),
-    },
+    inputSchema: z.object({
+          auditType: z
+            .enum(["FULL", "FAST", "COMPLEMENTARY"])
+            .describe("Type of RGAA audit"),
+          procedureName: z.string().describe("Name of the audited procedure/site"),
+          pages: z
+            .array(
+              z.object({
+                name: z.string().describe("Page name (e.g. 'Page d'accueil')"),
+                url: z.string().describe("Page URL"),
+              })
+            )
+            .describe("List of pages to audit"),
+          auditorName: z.string().describe("Name of the auditor"),
+          auditorEmail: z.string().optional().describe("Email of the auditor"),
+          pageElements: z
+            .object({
+              multimedia: z.boolean().describe("Site contains multimedia elements"),
+              form: z.boolean().describe("Site contains form elements"),
+              table: z.boolean().describe("Site contains data tables"),
+              frame: z.boolean().describe("Site contains iframes"),
+            })
+            .describe("Types of elements present on the site"),
+        }),
     annotations: ADDITIVE,
   },
   async (args) => {
@@ -233,9 +260,9 @@ server.registerTool(
     title: "Get an audit",
     description:
       "Retrieve a full audit by its editUniqueId. Returns all metadata, pages, environments, and notes.",
-    inputSchema: {
-      uniqueId: z.string().describe("The editUniqueId of the audit"),
-    },
+    inputSchema: z.object({
+          uniqueId: z.string().describe("The editUniqueId of the audit"),
+        }),
     annotations: READ_ONLY,
   },
   async ({ uniqueId }) => {
@@ -258,77 +285,77 @@ server.registerTool(
     title: "Update an audit (full replace)",
     description:
       "Full update of an audit's metadata (procedure info, auditor info, environments, tools, technologies, notes, etc.). This REPLACES the existing metadata: fetch the audit with get_audit first and resend the fields you want to keep.",
-    inputSchema: {
-      uniqueId: z.string().describe("The editUniqueId of the audit"),
-      auditType: z.enum(["FULL", "FAST", "COMPLEMENTARY"]),
-      procedureName: z.string(),
-      pages: z.array(
-        z.object({
-          id: z
-            .number()
+    inputSchema: z.object({
+          uniqueId: z.string().describe("The editUniqueId of the audit"),
+          auditType: z.enum(["FULL", "FAST", "COMPLEMENTARY"]),
+          procedureName: z.string(),
+          pages: z.array(
+            z.object({
+              id: z
+                .number()
+                .optional()
+                .describe("Page ID (include to update existing page)"),
+              name: z.string(),
+              url: z.string(),
+            })
+          ),
+          auditorName: z.string(),
+          auditorEmail: z.string().optional(),
+          procedureUrl: z.string().optional().describe("URL of the audited site"),
+          initiator: z
+            .string()
             .optional()
-            .describe("Page ID (include to update existing page)"),
-          name: z.string(),
-          url: z.string(),
-        })
-      ),
-      auditorName: z.string(),
-      auditorEmail: z.string().optional(),
-      procedureUrl: z.string().optional().describe("URL of the audited site"),
-      initiator: z
-        .string()
-        .optional()
-        .describe("Organisation requesting the audit"),
-      auditorOrganisation: z.string().optional(),
-      contactName: z.string().optional().describe("Accessibility contact name"),
-      contactEmail: z
-        .string()
-        .optional()
-        .describe("Accessibility contact email"),
-      contactFormUrl: z
-        .string()
-        .optional()
-        .describe("URL of accessibility contact form"),
-      tools: z
-        .array(z.string())
-        .optional()
-        .describe("Audit tools used (e.g. ['Axe', 'WAVE'])"),
-      environments: z
-        .array(
-          z.object({
-            platform: z.string().describe("e.g. 'Desktop' or 'Mobile'"),
-            operatingSystem: z.string().describe("e.g. 'Windows', 'macOS'"),
-            assistiveTechnology: z
-              .string()
-              .describe("e.g. 'JAWS', 'NVDA', 'VoiceOver'"),
-            browser: z.string().describe("e.g. 'Firefox', 'Chrome'"),
-          })
-        )
-        .optional()
-        .describe("Test environments used"),
-      technologies: z
-        .array(z.string())
-        .optional()
-        .describe("Technologies used on the site (e.g. ['HTML', 'CSS', 'JavaScript'])"),
-      notCompliantContent: z
-        .string()
-        .optional()
-        .describe("Description of non-compliant content"),
-      derogatedContent: z
-        .string()
-        .optional()
-        .describe("Description of derogated content"),
-      notInScopeContent: z
-        .string()
-        .optional()
-        .describe("Description of content not in scope"),
-      notes: z.string().optional().describe("General audit notes (rich text)"),
-      transverseElements: z
-        .string()
-        .array()
-        .optional()
-        .describe("Transverse elements (e.g. ['En-tête', 'Pied de page'])"),
-    },
+            .describe("Organisation requesting the audit"),
+          auditorOrganisation: z.string().optional(),
+          contactName: z.string().optional().describe("Accessibility contact name"),
+          contactEmail: z
+            .string()
+            .optional()
+            .describe("Accessibility contact email"),
+          contactFormUrl: z
+            .string()
+            .optional()
+            .describe("URL of accessibility contact form"),
+          tools: z
+            .array(z.string())
+            .optional()
+            .describe("Audit tools used (e.g. ['Axe', 'WAVE'])"),
+          environments: z
+            .array(
+              z.object({
+                platform: z.string().describe("e.g. 'Desktop' or 'Mobile'"),
+                operatingSystem: z.string().describe("e.g. 'Windows', 'macOS'"),
+                assistiveTechnology: z
+                  .string()
+                  .describe("e.g. 'JAWS', 'NVDA', 'VoiceOver'"),
+                browser: z.string().describe("e.g. 'Firefox', 'Chrome'"),
+              })
+            )
+            .optional()
+            .describe("Test environments used"),
+          technologies: z
+            .array(z.string())
+            .optional()
+            .describe("Technologies used on the site (e.g. ['HTML', 'CSS', 'JavaScript'])"),
+          notCompliantContent: z
+            .string()
+            .optional()
+            .describe("Description of non-compliant content"),
+          derogatedContent: z
+            .string()
+            .optional()
+            .describe("Description of derogated content"),
+          notInScopeContent: z
+            .string()
+            .optional()
+            .describe("Description of content not in scope"),
+          notes: z.string().optional().describe("General audit notes (rich text)"),
+          transverseElements: z
+            .string()
+            .array()
+            .optional()
+            .describe("Transverse elements (e.g. ['En-tête', 'Pied de page'])"),
+        }),
     annotations: DESTRUCTIVE,
   },
   async ({ uniqueId, ...data }) => {
@@ -355,10 +382,10 @@ server.registerTool(
     title: "Replace the audit notes",
     description:
       "Update only the notes field of an audit, without touching other metadata. The new content REPLACES the existing notes.",
-    inputSchema: {
-      uniqueId: z.string().describe("The editUniqueId of the audit"),
-      notes: z.string().describe("New notes content (rich text / HTML)"),
-    },
+    inputSchema: z.object({
+          uniqueId: z.string().describe("The editUniqueId of the audit"),
+          notes: z.string().describe("New notes content (rich text / HTML)"),
+        }),
     annotations: DESTRUCTIVE,
   },
   async ({ uniqueId, notes }) => {
@@ -381,9 +408,9 @@ server.registerTool(
     title: "Delete an audit",
     description:
       "Soft-delete an audit. The audit will return HTTP 410 Gone for future requests. This cannot be undone from this server.",
-    inputSchema: {
-      uniqueId: z.string().describe("The editUniqueId of the audit to delete"),
-    },
+    inputSchema: z.object({
+          uniqueId: z.string().describe("The editUniqueId of the audit to delete"),
+        }),
     annotations: DESTRUCTIVE,
   },
   async ({ uniqueId }) => {
@@ -406,12 +433,12 @@ server.registerTool(
     title: "Duplicate an audit",
     description:
       "Fully duplicate an existing audit (metadata, pages, RGAA results, example images). Returns a new audit with fresh IDs. The source audit is left untouched.",
-    inputSchema: {
-      uniqueId: z
-        .string()
-        .describe("The editUniqueId of the audit to duplicate"),
-      procedureName: z.string().describe("Name for the duplicated audit"),
-    },
+    inputSchema: z.object({
+          uniqueId: z
+            .string()
+            .describe("The editUniqueId of the audit to duplicate"),
+          procedureName: z.string().describe("Name for the duplicated audit"),
+        }),
     annotations: ADDITIVE,
   },
   async ({ uniqueId, procedureName }) => {
@@ -439,9 +466,9 @@ server.registerTool(
     title: "Publish an audit (public)",
     description:
       "Mark an audit as published/completed. This makes the audit report and its accessibility statement PUBLICLY available at their consultation URL — confirm with the user before calling it. The audit must be fully filled in (all criteria evaluated) before publishing. Returns HTTP 409 if incomplete.",
-    inputSchema: {
-      uniqueId: z.string().describe("The editUniqueId of the audit to publish"),
-    },
+    inputSchema: z.object({
+          uniqueId: z.string().describe("The editUniqueId of the audit to publish"),
+        }),
     annotations: DESTRUCTIVE,
   },
   async ({ uniqueId }) => {
@@ -473,9 +500,9 @@ server.registerTool(
 - compliantComment / notCompliantComment / notApplicableComment
 - userImpact: MINOR | MAJOR | BLOCKING (when not compliant)
 - quickWin: whether the fix is easy`,
-    inputSchema: {
-      uniqueId: z.string().describe("The editUniqueId of the audit"),
-    },
+    inputSchema: z.object({
+          uniqueId: z.string().describe("The editUniqueId of the audit"),
+        }),
     annotations: READ_ONLY,
   },
   async ({ uniqueId }) => {
@@ -506,53 +533,53 @@ The topic/criterium must be a valid RGAA combination. Topics 1-13:
 
 Status values: COMPLIANT, NOT_COMPLIANT, NOT_APPLICABLE, NOT_TESTED
 User impact values: MINOR, MAJOR, BLOCKING`,
-    inputSchema: {
-      uniqueId: z.string().describe("The editUniqueId of the audit"),
-      results: z
-        .array(
-          z.object({
-            pageId: z.number().describe("ID of the page being evaluated"),
-            topic: z
-              .number()
-              .min(1)
-              .max(13)
-              .describe("RGAA topic number (1-13)"),
-            criterium: z
-              .number()
-              .min(1)
-              .describe("Criterion number within the topic"),
-            status: z
-              .enum([
-                "COMPLIANT",
-                "NOT_COMPLIANT",
-                "NOT_APPLICABLE",
-                "NOT_TESTED",
-              ])
-              .describe("Evaluation result"),
-            compliantComment: z
-              .string()
-              .optional()
-              .describe("Comment when criterion is compliant"),
-            notCompliantComment: z
-              .string()
-              .optional()
-              .describe("Description of the non-compliance issue"),
-            userImpact: z
-              .enum(["MINOR", "MAJOR", "BLOCKING"])
-              .optional()
-              .describe("User impact level when not compliant"),
-            quickWin: z
-              .boolean()
-              .optional()
-              .describe("Whether this is easy to fix"),
-            notApplicableComment: z
-              .string()
-              .optional()
-              .describe("Comment when criterion is not applicable"),
-          })
-        )
-        .describe("Array of criterion results to update"),
-    },
+    inputSchema: z.object({
+          uniqueId: z.string().describe("The editUniqueId of the audit"),
+          results: z
+            .array(
+              z.object({
+                pageId: z.number().describe("ID of the page being evaluated"),
+                topic: z
+                  .number()
+                  .min(1)
+                  .max(13)
+                  .describe("RGAA topic number (1-13)"),
+                criterium: z
+                  .number()
+                  .min(1)
+                  .describe("Criterion number within the topic"),
+                status: z
+                  .enum([
+                    "COMPLIANT",
+                    "NOT_COMPLIANT",
+                    "NOT_APPLICABLE",
+                    "NOT_TESTED",
+                  ])
+                  .describe("Evaluation result"),
+                compliantComment: z
+                  .string()
+                  .optional()
+                  .describe("Comment when criterion is compliant"),
+                notCompliantComment: z
+                  .string()
+                  .optional()
+                  .describe("Description of the non-compliance issue"),
+                userImpact: z
+                  .enum(["MINOR", "MAJOR", "BLOCKING"])
+                  .optional()
+                  .describe("User impact level when not compliant"),
+                quickWin: z
+                  .boolean()
+                  .optional()
+                  .describe("Whether this is easy to fix"),
+                notApplicableComment: z
+                  .string()
+                  .optional()
+                  .describe("Comment when criterion is not applicable"),
+              })
+            )
+            .describe("Array of criterion results to update"),
+        }),
     annotations: DESTRUCTIVE,
   },
   async ({ uniqueId, results }) => {
@@ -577,10 +604,10 @@ server.registerTool(
     title: "Get results for one page",
     description:
       "Get criterion results for a specific page of an audit. The pageSlug is typically the page order number.",
-    inputSchema: {
-      uniqueId: z.string().describe("The editUniqueId of the audit"),
-      pageSlug: z.string().describe("The page slug (usually its order number)"),
-    },
+    inputSchema: z.object({
+          uniqueId: z.string().describe("The editUniqueId of the audit"),
+          pageSlug: z.string().describe("The page slug (usually its order number)"),
+        }),
     annotations: READ_ONLY,
   },
   async ({ uniqueId, pageSlug }) => {
@@ -603,11 +630,11 @@ server.registerTool(
     title: "Get the audit report",
     description:
       "Get the full audit report (read-only). Includes accessibility rate, criteria counts, and result distributions by page and topic. Uses the consultUniqueId (not the editUniqueId).",
-    inputSchema: {
-      consultUniqueId: z
-        .string()
-        .describe("The consultUniqueId of the audit (found in the audit data)"),
-    },
+    inputSchema: z.object({
+          consultUniqueId: z
+            .string()
+            .describe("The consultUniqueId of the audit (found in the audit data)"),
+        }),
     annotations: READ_ONLY,
   },
   async ({ consultUniqueId }) => {
@@ -630,43 +657,43 @@ server.registerTool(
     title: "Update the accessibility statement",
     description:
       "Update the accessibility statement (déclaration d'accessibilité) for an audit. This is used to generate the public accessibility statement, and REPLACES the current statement fields.",
-    inputSchema: {
-      editUniqueId: z.string().describe("The editUniqueId of the audit"),
-      initiator: z
-        .string()
-        .optional()
-        .describe("Organisation requesting the audit"),
-      auditorOrganisation: z
-        .string()
-        .optional()
-        .describe("Auditing organisation"),
-      procedureUrl: z.string().optional().describe("URL of the audited site"),
-      contactName: z.string().optional().describe("Accessibility contact name"),
-      contactEmail: z
-        .string()
-        .optional()
-        .describe("Accessibility contact email"),
-      contactFormUrl: z
-        .string()
-        .optional()
-        .describe("Accessibility contact form URL"),
-      technologies: z.array(z.string()).optional().describe("Technologies used"),
-      tools: z.array(z.string()).optional().describe("Audit tools used"),
-      environments: z
-        .array(
-          z.object({
-            platform: z.string(),
-            operatingSystem: z.string(),
-            assistiveTechnology: z.string(),
-            browser: z.string(),
-          })
-        )
-        .optional()
-        .describe("Test environments"),
-      notCompliantContent: z.string().optional(),
-      derogatedContent: z.string().optional(),
-      notInScopeContent: z.string().optional(),
-    },
+    inputSchema: z.object({
+          editUniqueId: z.string().describe("The editUniqueId of the audit"),
+          initiator: z
+            .string()
+            .optional()
+            .describe("Organisation requesting the audit"),
+          auditorOrganisation: z
+            .string()
+            .optional()
+            .describe("Auditing organisation"),
+          procedureUrl: z.string().optional().describe("URL of the audited site"),
+          contactName: z.string().optional().describe("Accessibility contact name"),
+          contactEmail: z
+            .string()
+            .optional()
+            .describe("Accessibility contact email"),
+          contactFormUrl: z
+            .string()
+            .optional()
+            .describe("Accessibility contact form URL"),
+          technologies: z.array(z.string()).optional().describe("Technologies used"),
+          tools: z.array(z.string()).optional().describe("Audit tools used"),
+          environments: z
+            .array(
+              z.object({
+                platform: z.string(),
+                operatingSystem: z.string(),
+                assistiveTechnology: z.string(),
+                browser: z.string(),
+              })
+            )
+            .optional()
+            .describe("Test environments"),
+          notCompliantContent: z.string().optional(),
+          derogatedContent: z.string().optional(),
+          notInScopeContent: z.string().optional(),
+        }),
     annotations: DESTRUCTIVE,
   },
   async ({ editUniqueId, ...data }) => {
@@ -691,9 +718,9 @@ server.registerTool(
   {
     title: "Export results as CSV",
     description: "Export audit results in CSV format.",
-    inputSchema: {
-      uniqueId: z.string().describe("The editUniqueId of the audit"),
-    },
+    inputSchema: z.object({
+          uniqueId: z.string().describe("The editUniqueId of the audit"),
+        }),
     annotations: READ_ONLY,
   },
   async ({ uniqueId }) => {
@@ -705,6 +732,8 @@ server.registerTool(
     }
   }
 );
+
+} // fin de registerAllTools
 
 // ─── Auto-login on startup ───────────────────────────────
 
@@ -733,8 +762,9 @@ async function autoLogin() {
 
 async function main() {
   await autoLogin();
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  // Negotiates the protocol revision when the connection opens, and serves
+  // both the 2025 era and 2026-07-28 from the same factory.
+  serveStdio(() => buildServer());
   console.error("[ara-mcp] Server running on stdio");
 }
 
