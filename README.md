@@ -97,6 +97,21 @@ Deux conséquences pratiques :
 - ne traitez jamais la suppression comme un moyen d'annuler une publication ;
 - publier un audit portant sur un site tiers met en ligne **une déclaration d'accessibilité le concernant, signée de vous** — assurez-vous d'en avoir le mandat.
 
+## Citer du HTML dans un commentaire
+
+Ara **affiche les commentaires de critère en texte riche** : un `<th>` écrit tel quel est interprété comme une balise et disparaît du commentaire rendu — l'API répond 200, le constat perd sa substance, et rien ne le signale.
+
+Depuis la 2.2.1, `update_audit_results` **échappe `<` et `>`** dans `compliantComment`, `notApplicableComment` et le `title`/`comment` de chaque `notCompliantItems`. Citez donc le balisage librement :
+
+```
+"comment": "Le champ n'a ni <label for>, ni aria-label."
+      ↳ affiché dans Ara :  Le champ n'a ni <label for>, ni aria-label.
+```
+
+N'échappez pas vous-même : `&` est laissé intact, donc un `&lt;th&gt;` déjà échappé reste correct.
+
+**Exception : le champ `notes`** (`patch_audit_notes`) reste du texte riche non échappé — c'est le champ prévu pour la mise en forme. Pour y citer du balisage, écrivez `&lt;th&gt;`.
+
 ## Révisions de protocole MCP
 
 Depuis la 2.1.0, le serveur sert **les deux révisions de la spécification** depuis le même code, en négociant à l'ouverture de la connexion :

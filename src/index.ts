@@ -32,7 +32,7 @@ import {
 // ─── Configuration ────────────────────────────────────────
 
 /** Keep in sync with the "version" field of package.json. */
-const SERVER_VERSION = "2.2.0";
+const SERVER_VERSION = "2.2.1";
 
 const ARA_BASE_URL =
   process.env.ARA_BASE_URL || "https://ara.numerique.gouv.fr/api";
@@ -158,6 +158,29 @@ async function authenticateFromEnv(preferLogin = false): Promise<string> {
   const token = await client.signin(username!, password!);
   client.setAuthToken(token);
   return "Re-authenticated from ARA_USERNAME / ARA_PASSWORD. Token refreshed.";
+}
+
+// ─── Rich-text safety ─────────────────────────────────────
+
+/**
+ * Ara stores criterion comments as rich text.
+ *
+ * An accessibility audit quotes markup constantly — "<th>", "<label for>",
+ * "<video>" — and sent as-is those are parsed as tags and silently vanish from
+ * the stored comment. The API answers 200, the auditor's finding loses its
+ * substance, and nothing reports it.
+ *
+ * Escaping the angle brackets makes quoted code survive. `&` is deliberately
+ * left alone so that a caller who already escaped ("&lt;th&gt;") is not
+ * double-escaped.
+ */
+function escapeRichText(value: string): string {
+  return value.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/** Same, but leaves undefined untouched. */
+function escapeOptional(value?: string): string | undefined {
+  return value === undefined ? undefined : escapeRichText(value);
 }
 
 // ─── RGAA reference ───────────────────────────────────────
@@ -509,7 +532,7 @@ server.registerTool(
   {
     title: "Replace the audit notes",
     description:
-      "Update only the notes field of an audit, without touching other metadata. The new content REPLACES the existing notes.",
+      "Update only the notes field of an audit, without touching other metadata. The new content REPLACES the existing notes.\n\nUnlike criterion comments, this field is passed through as rich text: HTML is interpreted. Write &lt;th&gt; rather than <th> if you need to quote markup literally.",
     inputSchema: z.object({
           uniqueId: z.string().describe("The editUniqueId of the audit"),
           notes: z.string().describe("New notes content (rich text / HTML)"),
@@ -662,6 +685,8 @@ Status values: COMPLIANT, NOT_COMPLIANT, NOT_APPLICABLE, NOT_TESTED
 
 Before evaluating a criterion, call get_rgaa_criterion to read its wording and its tests: it is what lets you judge rather than guess.
 
+Comments are stored as rich text by Ara, so this server escapes < and > before sending: quote markup freely (<th>, <label for>, <video>) and it will survive as written. Do not pre-escape.
+
 Describing a non-compliance: the details live in notCompliantItems, one entry per issue found, each with its own title, comment, userImpact (MINOR | MAJOR | BLOCKING) and quickWin. The API requires this array on EVERY item — send [] when there is nothing to report. Ara counts an audit as having blocking issues by looking at the userImpact of these entries, not of the criterion.`,
     inputSchema: z.object({
           uniqueId: z.string().describe("The editUniqueId of the audit"),
@@ -727,7 +752,18 @@ Describing a non-compliance: the details live in notCompliantItems, one entry pe
   },
   async ({ uniqueId, results }) => {
     try {
-      await client.updateResults(uniqueId, results);
+      // Les commentaires sont stockés en texte riche : voir escapeRichText.
+      const safe = results.map((r) => ({
+        ...r,
+        compliantComment: escapeOptional(r.compliantComment),
+        notApplicableComment: escapeOptional(r.notApplicableComment),
+        notCompliantItems: (r.notCompliantItems ?? []).map((i) => ({
+          ...i,
+          title: escapeOptional(i.title),
+          comment: escapeOptional(i.comment),
+        })),
+      }));
+      await client.updateResults(uniqueId, safe);
       return textResult({
         message: `Successfully updated ${results.length} criterion result(s)`,
       });
