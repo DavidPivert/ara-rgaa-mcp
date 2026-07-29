@@ -22,12 +22,15 @@ export class AraClient {
     this.authToken = config.authToken;
   }
 
-  private headers(extra: Record<string, string> = {}): Record<string, string> {
+  private headers(
+    extra: Record<string, string> = {},
+    includeAuth = true
+  ): Record<string, string> {
     const h: Record<string, string> = {
       "Content-Type": "application/json",
       ...extra,
     };
-    if (this.authToken) {
+    if (includeAuth && this.authToken) {
       h["Authorization"] = `Bearer ${this.authToken}`;
     }
     return h;
@@ -36,12 +39,14 @@ export class AraClient {
   private async request<T>(
     method: string,
     path: string,
-    body?: unknown
+    body?: unknown,
+    options: { auth?: boolean } = {}
   ): Promise<T> {
+    const { auth = true } = options;
     const url = `${this.baseUrl}${path}`;
     const opts: RequestInit = {
       method,
-      headers: this.headers(),
+      headers: this.headers({}, auth),
     };
     if (body !== undefined) {
       opts.body = JSON.stringify(body);
@@ -65,12 +70,38 @@ export class AraClient {
 
   // ─── Auth ───────────────────────────────────────────────
 
-  /** Sign in and return a JWT token */
+  /**
+   * Sign in and return a JWT token.
+   *
+   * Sent WITHOUT the Authorization header: carrying a stale or expired token
+   * on this route makes the Ara API answer `404 Cannot POST /api/auth/signin`
+   * instead of a real result — which would break the very case sign-in exists
+   * for, renewing an expired session.
+   */
   async signin(username: string, password: string): Promise<string> {
-    return this.request<string>("POST", "/auth/signin", {
-      username,
-      password,
-    });
+    const payload = await this.request<unknown>(
+      "POST",
+      "/auth/signin",
+      { username, password },
+      { auth: false }
+    );
+
+    // The API has returned the raw token as a string; accept the common
+    // object shapes too rather than silently storing an object as a token.
+    const token =
+      typeof payload === "string"
+        ? payload
+        : (payload as Record<string, unknown> | null)?.["accessToken"] ??
+          (payload as Record<string, unknown> | null)?.["access_token"] ??
+          (payload as Record<string, unknown> | null)?.["token"];
+
+    if (typeof token !== "string" || token.length === 0) {
+      throw new Error(
+        "Unexpected sign-in response: no token found. The Ara API may have " +
+          "changed its response shape."
+      );
+    }
+    return token;
   }
 
   /** Set the auth token for subsequent requests */
