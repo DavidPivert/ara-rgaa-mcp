@@ -26,7 +26,7 @@ import { AraClient } from "./ara-client.js";
 // ─── Configuration ────────────────────────────────────────
 
 /** Keep in sync with the "version" field of package.json. */
-const SERVER_VERSION = "2.1.2";
+const SERVER_VERSION = "2.1.3";
 
 const ARA_BASE_URL =
   process.env.ARA_BASE_URL || "https://ara.numerique.gouv.fr/api";
@@ -411,7 +411,7 @@ server.registerTool(
   {
     title: "Delete an audit",
     description:
-      "Soft-delete an audit. The audit will return HTTP 410 Gone for future requests. This cannot be undone from this server.",
+      "Soft-delete an audit. The audit itself returns HTTP 410 Gone for future requests, and disappears from the account's audit list. This cannot be undone from this server.\n\nIMPORTANT — deleting does NOT unpublish. If the audit was published, its report REMAINS publicly readable at its consultation URL after deletion, and it is then reachable from nowhere in the Ara interface, so it can no longer be edited or withdrawn. Verified against the live API. Do not present deletion to the user as a way to undo a publication.",
     inputSchema: z.object({
           uniqueId: z.string().describe("The editUniqueId of the audit to delete"),
         }),
@@ -469,7 +469,7 @@ server.registerTool(
   {
     title: "Publish an audit (public)",
     description:
-      "Mark an audit as published/completed. This makes the audit report and its accessibility statement PUBLICLY available at their consultation URL — confirm with the user before calling it. The audit must be fully filled in (all criteria evaluated) before publishing. Returns HTTP 409 if incomplete.",
+      "Mark an audit as published/completed. This makes the audit report and its accessibility statement PUBLICLY available at their consultation URL — confirm with the user before calling it. The audit must be fully filled in (all criteria evaluated) before publishing. Returns HTTP 409 if incomplete.\n\nIMPORTANT — publishing is effectively irreversible from here. There is no unpublish operation, and delete_audit does NOT withdraw a published report: it stays publicly readable while disappearing from the Ara interface. Make sure the user means to publish THIS audit, on THIS site, before calling it — publishing an audit about a third party puts a public accessibility statement about them under the auditor's name.",
     inputSchema: z.object({
           uniqueId: z.string().describe("The editUniqueId of the audit to publish"),
         }),

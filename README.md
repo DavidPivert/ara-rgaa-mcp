@@ -60,8 +60,24 @@ Chaque outil porte des **annotations** (`readOnlyHint`, `destructiveHint`, `idem
 | `patch_audit_notes` | ⚠️ destructif | **Remplace** les notes de l'audit |
 | `update_audit_results` | ⚠️ destructif | **Remplace** l'évaluation des critères visés |
 | `update_statement` | ⚠️ destructif | **Remplace ET publie** la déclaration d'accessibilité |
-| `publish_audit` | ⚠️ destructif | **Rend l'audit public** — à confirmer avec l'utilisateur |
-| `delete_audit` | ⚠️ destructif | Suppression (soft delete, 410 ensuite) |
+| `publish_audit` | ⚠️ destructif | **Rend l'audit public — irréversible** (voir ci-dessous) |
+| `delete_audit` | ⚠️ destructif | Suppression (410 ensuite) — **ne dépublie pas** |
+
+## ⚠️ Publier est irréversible
+
+Ara n'offre aucune dépublication, et **supprimer un audit ne retire pas son rapport publié** :
+
+| Après `publish_audit` puis `delete_audit` | |
+|---|---|
+| `GET /audits/:editUniqueId` | `410 Gone` — l'audit disparaît de votre liste |
+| `GET /reports/:consultUniqueId` | **`200`** — le rapport reste publiquement lisible |
+
+Le rapport devient alors inaccessible depuis l'interface d'Ara : vous ne pouvez plus ni le consulter, ni le corriger, ni le retirer. Seul votre nom d'auditeur disparaît du rapport public ; le contenu de l'audit demeure.
+
+Deux conséquences pratiques :
+
+- ne traitez jamais la suppression comme un moyen d'annuler une publication ;
+- publier un audit portant sur un site tiers met en ligne **une déclaration d'accessibilité le concernant, signée de vous** — assurez-vous d'en avoir le mandat.
 
 ## Révisions de protocole MCP
 
