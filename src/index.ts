@@ -97,17 +97,28 @@ const DESTRUCTIVE = {
 /**
  * Authenticate from the process environment.
  * Returns a human-readable status string; never returns or logs the token.
+ *
+ * `preferLogin` is set when refreshing an expired session: signing in again
+ * is the only thing that can produce a fresh token, so credentials take
+ * precedence over the static ARA_AUTH_TOKEN in that case. At startup the
+ * precedence is reversed — the static token is used as-is.
  */
-async function authenticateFromEnv(): Promise<string> {
-  if (process.env.ARA_AUTH_TOKEN) {
-    client.setAuthToken(process.env.ARA_AUTH_TOKEN);
-    return "Using the static token from ARA_AUTH_TOKEN. Nothing to refresh.";
-  }
-
+async function authenticateFromEnv(preferLogin = false): Promise<string> {
   const username = process.env.ARA_USERNAME;
   const password = process.env.ARA_PASSWORD;
+  const canLogin = Boolean(username && password);
+  const staticToken = process.env.ARA_AUTH_TOKEN;
 
-  if (!username || !password) {
+  if (staticToken && !(preferLogin && canLogin)) {
+    client.setAuthToken(staticToken);
+    return preferLogin
+      ? "Using the static token from ARA_AUTH_TOKEN. It cannot be refreshed: " +
+          "issue a new token, or set ARA_USERNAME / ARA_PASSWORD to allow " +
+          "signing in again."
+      : "Using the static token from ARA_AUTH_TOKEN.";
+  }
+
+  if (!canLogin) {
     throw new Error(
       "No credentials configured. Set ARA_AUTH_TOKEN (recommended), or " +
         "ARA_USERNAME and ARA_PASSWORD, in the `env` block of this server's " +
@@ -116,7 +127,7 @@ async function authenticateFromEnv(): Promise<string> {
     );
   }
 
-  const token = await client.signin(username, password);
+  const token = await client.signin(username!, password!);
   client.setAuthToken(token);
   return "Re-authenticated from ARA_USERNAME / ARA_PASSWORD. Token refreshed.";
 }
@@ -147,7 +158,7 @@ Use this tool only when a call has failed with an expired-token error.`,
   },
   async () => {
     try {
-      const message = await authenticateFromEnv();
+      const message = await authenticateFromEnv(true);
       return textResult({ authenticated: client.isAuthenticated(), message });
     } catch (err) {
       return errorResult(err);

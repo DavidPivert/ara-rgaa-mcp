@@ -8,7 +8,6 @@
   "bin": {
     "ara-rgaa-mcp": "./build/index.js"
   },
-  "main": "./build/index.js",
   "files": [
     "build",
     "README.md",
