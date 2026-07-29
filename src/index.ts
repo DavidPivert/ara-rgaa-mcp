@@ -26,7 +26,7 @@ import { AraClient } from "./ara-client.js";
 // ─── Configuration ────────────────────────────────────────
 
 /** Keep in sync with the "version" field of package.json. */
-const SERVER_VERSION = "2.1.0";
+const SERVER_VERSION = "2.1.1";
 
 const ARA_BASE_URL =
   process.env.ARA_BASE_URL || "https://ara.numerique.gouv.fr/api";
@@ -221,7 +221,11 @@ Audit types:
             )
             .describe("List of pages to audit"),
           auditorName: z.string().describe("Name of the auditor"),
-          auditorEmail: z.string().optional().describe("Email of the auditor"),
+          auditorEmail: z
+        .string()
+        .describe(
+          "Email of the auditor. Required: the Ara API answers 500 Internal Server Error when it is missing, even though it does not list the field as mandatory."
+        ),
           pageElements: z
             .object({
               multimedia: z.boolean().describe("Site contains multimedia elements"),
@@ -300,7 +304,7 @@ server.registerTool(
             })
           ),
           auditorName: z.string(),
-          auditorEmail: z.string().optional(),
+          auditorEmail: z.string(),
           procedureUrl: z.string().optional().describe("URL of the audited site"),
           initiator: z
             .string()
@@ -497,9 +501,8 @@ server.registerTool(
 - criterium: criterion number within the topic
 - pageId: ID of the audited page
 - status: COMPLIANT | NOT_COMPLIANT | NOT_APPLICABLE | NOT_TESTED
-- compliantComment / notCompliantComment / notApplicableComment
-- userImpact: MINOR | MAJOR | BLOCKING (when not compliant)
-- quickWin: whether the fix is easy`,
+- compliantComment / notApplicableComment
+- notCompliantItems: the individual issues found, each with title, comment, userImpact (MINOR | MAJOR | BLOCKING) and quickWin`,
     inputSchema: z.object({
           uniqueId: z.string().describe("The editUniqueId of the audit"),
         }),
@@ -532,7 +535,8 @@ The topic/criterium must be a valid RGAA combination. Topics 1-13:
 10. Présentation, 11. Formulaires, 12. Navigation, 13. Consultation
 
 Status values: COMPLIANT, NOT_COMPLIANT, NOT_APPLICABLE, NOT_TESTED
-User impact values: MINOR, MAJOR, BLOCKING`,
+
+Describing a non-compliance: the details live in notCompliantItems, one entry per issue found, each with its own title, comment, userImpact (MINOR | MAJOR | BLOCKING) and quickWin. The API requires this array on EVERY item — send [] when there is nothing to report. Ara counts an audit as having blocking issues by looking at the userImpact of these entries, not of the criterion.`,
     inputSchema: z.object({
           uniqueId: z.string().describe("The editUniqueId of the audit"),
           results: z
@@ -560,22 +564,35 @@ User impact values: MINOR, MAJOR, BLOCKING`,
                   .string()
                   .optional()
                   .describe("Comment when criterion is compliant"),
-                notCompliantComment: z
-                  .string()
-                  .optional()
-                  .describe("Description of the non-compliance issue"),
-                userImpact: z
-                  .enum(["MINOR", "MAJOR", "BLOCKING"])
-                  .optional()
-                  .describe("User impact level when not compliant"),
-                quickWin: z
-                  .boolean()
-                  .optional()
-                  .describe("Whether this is easy to fix"),
                 notApplicableComment: z
                   .string()
                   .optional()
                   .describe("Comment when criterion is not applicable"),
+                notCompliantItems: z
+                  .array(
+                    z.object({
+                      title: z
+                        .string()
+                        .optional()
+                        .describe("Short title of the issue"),
+                      comment: z
+                        .string()
+                        .optional()
+                        .describe("Description of the issue"),
+                      userImpact: z
+                        .enum(["MINOR", "MAJOR", "BLOCKING"])
+                        .optional()
+                        .describe("How much this issue impacts users"),
+                      quickWin: z
+                        .boolean()
+                        .optional()
+                        .describe("Whether this issue is easy to fix"),
+                    })
+                  )
+                  .default([])
+                  .describe(
+                    "The individual issues found for this criterion. Required by the API on EVERY item — send [] when the criterion is compliant, not applicable or not tested."
+                  ),
               })
             )
             .describe("Array of criterion results to update"),

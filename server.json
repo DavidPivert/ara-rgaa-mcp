@@ -3,7 +3,7 @@
   "name": "io.github.DavidPivert/ara-rgaa-mcp",
   "title": "Ara — audits d'accessibilité RGAA",
   "description": "Créer, remplir et publier des audits RGAA 4.1 sur Ara (plateforme de l'État). Non officiel.",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "repository": {
     "url": "https://github.com/DavidPivert/ara-rgaa-mcp",
     "source": "github"
@@ -14,7 +14,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "ara-rgaa-mcp",
-      "version": "2.1.0",
+      "version": "2.1.1",
       "transport": {
         "type": "stdio"
       },

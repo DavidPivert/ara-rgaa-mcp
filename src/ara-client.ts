@@ -254,7 +254,8 @@ export interface CreateAuditPayload {
   procedureName: string;
   pages: CreateAuditPage[];
   auditorName: string;
-  auditorEmail?: string;
+  /** Required in practice: the API answers 500 when it is missing. */
+  auditorEmail: string;
   pageElements: PageElements;
 }
 
@@ -270,7 +271,7 @@ export interface UpdateAuditPayload {
   procedureName: string;
   pages: CreateAuditPage[];
   auditorName: string;
-  auditorEmail?: string;
+  auditorEmail: string;
   procedureUrl?: string;
   initiator?: string;
   auditorOrganisation?: string;
@@ -291,16 +292,30 @@ export interface PatchAuditPayload {
   notes?: string;
 }
 
+/**
+ * One issue found for a criterion.
+ *
+ * Ara moved the description of a non-compliance out of the criterion and into
+ * this list: the user impact and the quick-win flag belong to each issue, not
+ * to the criterion as a whole. The report counts blocking issues by reading
+ * `userImpact` here.
+ */
+export interface NotCompliantItem {
+  title?: string;
+  comment?: string;
+  userImpact?: CriterionResultUserImpact;
+  quickWin?: boolean;
+}
+
 export interface UpdateResultsItem {
   pageId: number;
   topic: number;
   criterium: number;
   status: CriterionResultStatus;
   compliantComment?: string;
-  notCompliantComment?: string;
-  userImpact?: CriterionResultUserImpact;
-  quickWin?: boolean;
   notApplicableComment?: string;
+  /** Required by the API on every item; send [] when there is nothing to report. */
+  notCompliantItems: NotCompliantItem[];
 }
 
 export interface UpdateStatementPayload {
