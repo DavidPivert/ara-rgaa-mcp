@@ -27,12 +27,14 @@ import {
   RGAA_TOPICS,
   FAST_CRITERIA,
   COMPLEMENTARY_CRITERIA,
+  GUIDE_BESOINS,
+  type RgaaBesoin,
 } from "./rgaa-data.js";
 
 // ─── Configuration ────────────────────────────────────────
 
 /** Keep in sync with the "version" field of package.json. */
-const SERVER_VERSION = "2.2.1";
+const SERVER_VERSION = "2.3.0";
 
 const ARA_BASE_URL =
   process.env.ARA_BASE_URL || "https://ara.numerique.gouv.fr/api";
@@ -185,6 +187,26 @@ function escapeOptional(value?: string): string | undefined {
 
 // ─── RGAA reference ───────────────────────────────────────
 
+/** Besoins de vérification d'un critère, ou null s'il n'existe pas. */
+function besoinsDe(id: string): RgaaBesoin[] | null {
+  const [t, c] = id.split(".").map(Number);
+  const crit = RGAA_TOPICS.find((x) => x.number === t)?.criteria.find(
+    (x) => x.number === c
+  );
+  return crit ? crit.besoins : null;
+}
+
+/** Bloc de vérification joint à un critère. */
+function verificationDe(besoins: RgaaBesoin[]) {
+  return {
+    sourceSuffit: besoins.length === 0,
+    besoins,
+    commentVerifier: besoins.map((b) => `${b} — ${GUIDE_BESOINS[b]}`),
+    avertissement:
+      "Classification propre à ce serveur, déduite du vocabulaire des tests puis corrigée à la main. Le RGAA dit quoi vérifier, pas avec quel outil.",
+  };
+}
+
 /** Criteria covered by an Ara audit type, as "topic.criterium" ids. */
 function criteriaIdsFor(auditType: "FULL" | "FAST" | "COMPLEMENTARY"): string[] | null {
   if (auditType === "FAST") return FAST_CRITERIA;
@@ -257,6 +279,60 @@ Source: the RGAA reference shipped with Ara, published by the DINUM under Licenc
 );
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  TOOL: get_audit_method
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+server.registerTool(
+  "get_audit_method",
+  {
+    title: "Plan de travail d'un audit",
+    description: `Return the work plan for an audit type: which criteria can be settled by reading the HTML source, and which ones require the rendered page, keyboard navigation, the accessibility tree, or editorial judgement.
+
+Call this BEFORE starting an audit. It tells you which tools you will actually need — a browser, a keyboard pass, a screen reader — instead of discovering halfway through that half the criteria cannot be answered from markup.
+
+Criteria that need more than the source cannot be marked COMPLIANT or NOT_COMPLIANT by update_audit_results without declaring the matching evidence.
+
+This classification is guidance from this server, not a prescription of the RGAA.`,
+    inputSchema: z.object({
+      auditType: z
+        .enum(["FULL", "FAST", "COMPLEMENTARY"])
+        .describe("The Ara audit type you are about to run"),
+    }),
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async ({ auditType }) => {
+    try {
+      const keep = criteriaIdsFor(auditType);
+      const crits = RGAA_TOPICS.flatMap((t) =>
+        t.criteria
+          .filter((c) => !keep || keep.includes(`${t.number}.${c.number}`))
+          .map((c) => ({ id: `${t.number}.${c.number}`, titre: c.title, besoins: c.besoins }))
+      );
+      const parBesoin: Record<string, string[]> = {};
+      for (const c of crits)
+        for (const b of c.besoins) (parBesoin[b] ??= []).push(c.id);
+      const sourceSeul = crits.filter((c) => !c.besoins.length).map((c) => c.id);
+      return textResult({
+        rgaaVersion: RGAA_VERSION,
+        auditType,
+        criteres: crits.length,
+        sourceSuffit: { nombre: sourceSeul.length, criteres: sourceSeul },
+        exigentDavantage: Object.fromEntries(
+          Object.entries(parBesoin).map(([b, ids]) => [
+            b,
+            { nombre: ids.length, criteres: ids, commentFaire: GUIDE_BESOINS[b as RgaaBesoin] },
+          ])
+        ),
+        avertissement:
+          "Classification propre à ce serveur, déduite du vocabulaire des tests puis corrigée à la main. Le RGAA dit quoi vérifier, pas avec quel outil.",
+      });
+    } catch (err) {
+      return errorResult(err);
+    }
+  }
+);
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  TOOL: get_rgaa_criterion
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -267,6 +343,8 @@ server.registerTool(
     description: `Return the wording of a single RGAA ${RGAA_VERSION} criterion AND its numbered tests — the checks an auditor actually performs to decide COMPLIANT / NOT_COMPLIANT / NOT_APPLICABLE.
 
 Call this before evaluating a criterion with update_audit_results: it is what turns "topic 6, criterium 1" into something you can actually assess. Also tells whether the criterion belongs to the rapid or complementary audit.
+
+The "verification" block says what is needed BEYOND the HTML source to settle the criterion — keyboard navigation, rendered page, accessibility tree, or editorial judgement — and how to go about it. When "sourceSuffit" is false, reading the markup is not enough: open the page.
 
 Source: the RGAA reference shipped with Ara, published by the DINUM under Licence Ouverte 2.0.`,
     inputSchema: z.object({
@@ -296,6 +374,7 @@ Source: the RGAA reference shipped with Ara, published by the DINUM under Licenc
         title: c.title,
         inFastAudit: FAST_CRITERIA.includes(id),
         inComplementaryAudit: COMPLEMENTARY_CRITERIA.includes(id),
+        verification: verificationDe(c.besoins),
         tests: c.tests,
       });
     } catch (err) {
@@ -719,6 +798,12 @@ Describing a non-compliance: the details live in notCompliantItems, one entry pe
                   .string()
                   .optional()
                   .describe("Comment when criterion is not applicable"),
+                evidence: z
+                  .array(z.enum(["clavier", "rendu", "restitution", "humain"]))
+                  .optional()
+                  .describe(
+                    "What you actually did beyond reading the HTML source. Required when the criterion demands it — call get_rgaa_criterion or get_audit_method to know. Declare only what you truly performed."
+                  ),
                 notCompliantItems: z
                   .array(
                     z.object({
@@ -752,8 +837,38 @@ Describing a non-compliance: the details live in notCompliantItems, one entry pe
   },
   async ({ uniqueId, results }) => {
     try {
+      // Un verdict CONFORME ou NON CONFORME sur un critère qui ne se tranche
+      // pas depuis le source doit s'appuyer sur une vérification déclarée.
+      // NOT_TESTED et NOT_APPLICABLE en sont dispensés : ils n'affirment rien.
+      const manquants = results
+        .filter((r) => r.status === "COMPLIANT" || r.status === "NOT_COMPLIANT")
+        .map((r) => {
+          const id = `${r.topic}.${r.criterium}`;
+          const requis = besoinsDe(id) ?? [];
+          const fournis = r.evidence ?? [];
+          return { id, absents: requis.filter((b) => !fournis.includes(b)) };
+        })
+        .filter((x) => x.absents.length > 0);
+
+      if (manquants.length > 0) {
+        const detail = manquants
+          .map(
+            (m) =>
+              `  ${m.id} — exige : ${m.absents
+                .map((b) => `${b} (${GUIDE_BESOINS[b]})`)
+                .join(" ; ")}`
+          )
+          .join("\n");
+        throw new Error(
+          `Verdict refusé sur ${manquants.length} critère(s) : le code source ne suffit pas à les trancher, ` +
+            `et la vérification correspondante n'a pas été déclarée.\n\n${detail}\n\n` +
+            `Effectuez réellement ces vérifications, puis renseignez le champ "evidence" du résultat concerné. ` +
+            `Si vous ne pouvez pas les faire, utilisez le statut NOT_TESTED plutôt qu'un verdict non fondé.`
+        );
+      }
+
       // Les commentaires sont stockés en texte riche : voir escapeRichText.
-      const safe = results.map((r) => ({
+      const safe = results.map(({ evidence: _evidence, ...r }) => ({
         ...r,
         compliantComment: escapeOptional(r.compliantComment),
         notApplicableComment: escapeOptional(r.notApplicableComment),

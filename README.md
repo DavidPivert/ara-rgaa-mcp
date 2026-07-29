@@ -4,7 +4,7 @@ Serveur MCP (Model Context Protocol) qui expose les opérations CRUD sur les aud
 
 > **Projet communautaire, non officiel.** Ce serveur est un client tiers de l'API d'[Ara](https://github.com/DISIC/Ara), le service d'audit d'accessibilité de la DINUM. Il n'est ni édité ni maintenu par la DINUM.
 
-> **English** — An MCP server for [Ara](https://ara.numerique.gouv.fr), the French government platform for RGAA 4.1 accessibility audits. It exposes 15 tools to create, fill in, publish and export accessibility audits from any MCP client. Requires an account on ara.numerique.gouv.fr. Documentation is in French, matching the audience of the RGAA. Unofficial community project.
+> **English** — An MCP server for [Ara](https://ara.numerique.gouv.fr), the French government platform for RGAA 4.1 accessibility audits. It exposes 16 tools to create, fill in, publish and export accessibility audits from any MCP client. Requires an account on ara.numerique.gouv.fr. Documentation is in French, matching the audience of the RGAA. Unofficial community project.
 
 ## Installation
 
@@ -49,8 +49,9 @@ Chaque outil porte des **annotations** (`readOnlyHint`, `destructiveHint`, `idem
 
 | Outil | Nature | Description |
 |-------|--------|-------------|
+| `get_audit_method` | 📖 référentiel | **Plan de travail** : quels critères exigent quoi |
 | `list_rgaa_criteria` | 📖 référentiel | Index des critères RGAA (numéro + intitulé), filtrable |
-| `get_rgaa_criterion` | 📖 référentiel | Un critère **et ses tests** — ce qu'il faut lire pour évaluer |
+| `get_rgaa_criterion` | 📖 référentiel | Un critère, **ses tests** et ce qu'il faut pour le vérifier |
 | `auth_refresh` | ↻ | Rejoue l'authentification depuis l'environnement |
 | `create_audit` | ✚ additif | Créer un nouvel audit |
 | `duplicate_audit` | ✚ additif | Dupliquer un audit (la source n'est pas touchée) |
@@ -80,6 +81,33 @@ Le geste attendu pendant un audit : `get_rgaa_criterion` pour lire le critère e
 Les données proviennent de [`rgaa.json`](https://github.com/DISIC/Ara/blob/main/confiture-rest-api/src/rgaa.json) du projet Ara, publié par la **DINUM** sous **[Licence Ouverte 2.0](https://github.com/DISIC/Ara/blob/main/LICENCES.md)**. Elles sont embarquées dans le paquet — le serveur fonctionne donc hors ligne, sans appel réseau pour la partie référentiel. Régénération : `node scripts/build-rgaa-data.mjs`.
 
 > À noter : les types d'audit `FAST` et `COMPLEMENTARY` couvrent **25 critères chacun** et sont **disjoints** ; c'est la méthodologie complète (rapide + complémentaire) qui en couvre 50.
+
+## Le code source ne suffit pas
+
+Sur les 25 critères d'un audit rapide, **6 seulement se tranchent en lisant le HTML**. Les autres exigent la page rendue, une navigation clavier réelle, l'arbre d'accessibilité, ou un jugement éditorial.
+
+C'est le piège de l'audit assisté par IA : un agent lit du balisage, y trouve des réponses plausibles, et remplit un audit qui ne repose sur rien. Trois mécanismes s'y opposent.
+
+**`get_audit_method(auditType)`** — le plan de travail avant de commencer : quels critères relèvent du source, du rendu, du clavier, de la restitution, du jugement.
+
+**`get_rgaa_criterion`** joint à chaque critère un bloc `verification` : `sourceSuffit`, les besoins, et comment s'y prendre.
+
+**`update_audit_results` refuse un verdict non fondé.** Déclarer CONFORME ou NON CONFORME sur un critère qui exige davantage, sans renseigner le champ `evidence` correspondant, produit une erreur explicite :
+
+```
+Verdict refusé sur 1 critère(s) : le code source ne suffit pas à les trancher,
+et la vérification correspondante n'a pas été déclarée.
+
+  10.7 — exige : clavier (…) ; rendu (…)
+
+Effectuez réellement ces vérifications, puis renseignez le champ "evidence".
+Si vous ne pouvez pas les faire, utilisez le statut NOT_TESTED plutôt qu'un
+verdict non fondé.
+```
+
+`NOT_TESTED` et `NOT_APPLICABLE` en sont dispensés : ils n'affirment rien. Et `evidence` reste déclaratif — un agent peut mentir, mais plus par omission.
+
+> Cette classification est une **guidance de ce serveur**, déduite du vocabulaire des tests puis corrigée à la main. Le RGAA dit quoi vérifier, pas avec quel outil.
 
 ## ⚠️ Publier est irréversible
 
