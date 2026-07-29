@@ -114,6 +114,27 @@ export class AraClient {
     return Boolean(this.authToken);
   }
 
+  /**
+   * Échange le jeton courant contre un jeton neuf.
+   *
+   * Les jetons d'Ara durent 24 h. Rafraîchir au démarrage suffit à ce qu'un
+   * usage régulier ne demande jamais de se réidentifier. Exige un jeton encore
+   * valide : passé 24 h sans usage, il faut repasser par `login`.
+   */
+  async refreshToken(): Promise<string> {
+    const payload = await this.request<unknown>("POST", "/auth/refresh");
+    const token =
+      typeof payload === "string"
+        ? payload
+        : (payload as Record<string, unknown> | null)?.["accessToken"] ??
+          (payload as Record<string, unknown> | null)?.["access_token"] ??
+          (payload as Record<string, unknown> | null)?.["token"];
+    if (typeof token !== "string" || token.length === 0) {
+      throw new Error("Réponse inattendue de /auth/refresh : aucun jeton trouvé.");
+    }
+    return token;
+  }
+
   // ─── Audits — CRUD ─────────────────────────────────────
 
   /** Create a new audit */

@@ -8,17 +8,22 @@ Serveur MCP (Model Context Protocol) qui expose les opérations CRUD sur les aud
 
 ## Installation
 
-Aucun clone nécessaire. Ajouter ce bloc à la configuration MCP de votre client :
+**1. Se connecter, une fois :**
+
+```bash
+npx ara-rgaa-mcp login
+```
+
+Une page s'ouvre dans votre navigateur, sur votre propre ordinateur. Vous y saisissez vos identifiants Ara ; le jeton est enregistré dans `~/.config/ara-rgaa-mcp/credentials.json`, en permissions `600`. **Votre mot de passe n'est jamais enregistré.**
+
+**2. Déclarer le serveur — sans aucun secret dans la configuration :**
 
 ```json
 {
   "mcpServers": {
     "ara-rgaa": {
       "command": "npx",
-      "args": ["-y", "ara-rgaa-mcp"],
-      "env": {
-        "ARA_AUTH_TOKEN": "votre-jwt-token"
-      }
+      "args": ["-y", "ara-rgaa-mcp"]
     }
   }
 }
@@ -28,20 +33,45 @@ Aucun clone nécessaire. Ajouter ce bloc à la configuration MCP de votre client
 
 Pour Claude Code, le fichier est `~/.claude/claude_desktop_config.json`. Pour Codex ou Cursor, même format dans leurs réglages MCP respectifs.
 
-## Authentification
+**Le renouvellement est automatique.** Les jetons d'Ara durent 24 h, mais le serveur en demande un neuf à chaque démarrage : un usage régulier ne redemande jamais de se connecter. Après plus de 24 h sans usage, le serveur vous dit de relancer `login`.
+
+| Commande | |
+|---|---|
+| `npx ara-rgaa-mcp login` | Se connecter et enregistrer le jeton |
+| `npx ara-rgaa-mcp status` | Compte, instance, âge du jeton |
+| `npx ara-rgaa-mcp logout` | Supprimer le jeton enregistré |
+
+<details>
+<summary>Sécurité de la page de connexion</summary>
+
+Une page locale qui réclame des identifiants ressemble à du hameçonnage : le serveur prend donc quatre précautions.
+
+- Il écoute **uniquement sur `127.0.0.1`**, jamais sur une interface réseau.
+- L'URL comporte un **jeton aléatoire** qu'une autre page locale ne peut pas deviner ; toute autre adresse renvoie 404.
+- Elle est **à usage unique** : le serveur s'arrête dès la connexion réussie.
+- L'**URL exacte est affichée dans le terminal** — comparez-la à celle du navigateur avant de saisir quoi que ce soit.
+
+Votre mot de passe ne transite que du navigateur vers ce processus local, puis vers `ara.numerique.gouv.fr`. Il n'est écrit nulle part.
+
+Si vous n'avez pas lancé la commande vous-même, fermez la page.
+</details>
+
+## Authentification par variables d'environnement
+
+Alternative à `login`, pour l'automatisation ou les environnements sans navigateur.
 
 | Variable | Défaut | Description |
 |----------|--------|-------------|
-| `ARA_AUTH_TOKEN` | — | **Recommandé.** Token JWT pré-émis |
-| `ARA_USERNAME` | — | Email, pour l'auto-login au démarrage |
-| `ARA_PASSWORD` | — | Mot de passe, pour l'auto-login au démarrage |
+| `ARA_AUTH_TOKEN` | — | Jeton JWT. **⚠️ Valable 24 h seulement** |
+| `ARA_USERNAME` | — | Email, pour l'authentification au démarrage |
+| `ARA_PASSWORD` | — | Mot de passe, pour l'authentification au démarrage |
 | `ARA_BASE_URL` | `https://ara.numerique.gouv.fr/api` | URL de base de l'API Ara |
 
-**Les identifiants ne sont jamais acceptés en paramètres d'outil.** Un paramètre d'outil transite par le contexte du modèle et se retrouve conservé dans les transcripts de conversation. Ils sont donc lus **uniquement** depuis l'environnement du processus, que votre client MCP renseigne depuis son propre fichier de configuration.
+**Les identifiants ne sont jamais acceptés en paramètres d'outil.** Un paramètre d'outil transite par le contexte du modèle et se retrouve conservé dans les transcripts de conversation. Ils sont donc lus **uniquement** depuis l'environnement du processus ou depuis le fichier écrit par `login`.
 
-Préférez `ARA_AUTH_TOKEN` : le couple `ARA_USERNAME` / `ARA_PASSWORD` suppose d'écrire un mot de passe en clair dans un fichier de configuration. Si vous l'utilisez quand même, vérifiez les permissions du fichier et ne le versionnez pas.
+> **⚠️ `ARA_AUTH_TOKEN` expire au bout de 24 heures.** Les jetons d'Ara sont signés avec `expiresIn: "24h"` : un jeton collé à la main cesse de fonctionner le lendemain. Ne l'utilisez que pour une intégration automatisée qui sait le renouveler. Pour un usage quotidien, préférez `login` ci-dessus, ou à défaut `ARA_USERNAME` / `ARA_PASSWORD` — qui suppose en revanche d'écrire un mot de passe en clair dans un fichier de configuration.
 
-L'outil `auth_refresh` rejoue l'authentification depuis l'environnement — utile quand un token a expiré en cours de session.
+L'outil `auth_refresh` rejoue l'authentification en cours de session, si un jeton a expiré.
 
 ## Outils
 

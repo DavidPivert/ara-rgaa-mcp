@@ -23,6 +23,13 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { AraClient } from "./ara-client.js";
 import {
+  readCredentials,
+  writeCredentials,
+  clearCredentials,
+  credentialsPath,
+  ageEnHeures,
+} from "./credentials.js";
+import {
   RGAA_VERSION,
   RGAA_TOPICS,
   FAST_CRITERIA,
@@ -34,7 +41,7 @@ import {
 // ─── Configuration ────────────────────────────────────────
 
 /** Keep in sync with the "version" field of package.json. */
-const SERVER_VERSION = "2.3.0";
+const SERVER_VERSION = "2.4.0";
 
 const ARA_BASE_URL =
   process.env.ARA_BASE_URL || "https://ara.numerique.gouv.fr/api";
@@ -409,6 +416,17 @@ Use this tool only when a call has failed with an expired-token error.`,
   },
   async () => {
     try {
+      const stocke = readCredentials();
+      if (stocke && stocke.baseUrl === ARA_BASE_URL && !process.env.ARA_AUTH_TOKEN) {
+        client.setAuthToken(stocke.token);
+        const frais = await client.refreshToken();
+        client.setAuthToken(frais);
+        writeCredentials({ ...stocke, token: frais, obtenuLe: new Date().toISOString() });
+        return textResult({
+          authenticated: true,
+          message: `Session rafraîchie depuis le jeton enregistré${stocke.username ? ` (${stocke.username})` : ""}.`,
+        });
+      }
       const message = await authenticateFromEnv(true);
       return textResult({ authenticated: client.isAuthenticated(), message });
     } catch (err) {
@@ -1011,33 +1029,126 @@ server.registerTool(
 
 } // fin de registerAllTools
 
-// ─── Auto-login on startup ───────────────────────────────
+// ─── Authentification au démarrage ───────────────────────
 
-async function autoLogin() {
+/**
+ * Résout l'authentification, par ordre de priorité :
+ *   1. ARA_AUTH_TOKEN — jeton fourni tel quel (24 h, pour l'automatisation) ;
+ *   2. le fichier écrit par `login` — rafraîchi puis réécrit ;
+ *   3. ARA_USERNAME / ARA_PASSWORD — connexion au démarrage ;
+ *   4. rien — le serveur démarre quand même, et chaque appel expliquera quoi faire.
+ */
+async function resoudreAuthentification(): Promise<void> {
   if (process.env.ARA_AUTH_TOKEN) {
-    console.error("[ara-mcp] Using token from ARA_AUTH_TOKEN");
+    client.setAuthToken(process.env.ARA_AUTH_TOKEN);
+    console.error("[ara-mcp] Jeton fourni par ARA_AUTH_TOKEN (valable 24 h).");
     return;
   }
-  if (!process.env.ARA_USERNAME || !process.env.ARA_PASSWORD) {
-    console.error(
-      "[ara-mcp] No credentials in the environment. Set ARA_AUTH_TOKEN " +
-        "(recommended) or ARA_USERNAME / ARA_PASSWORD in your MCP client config."
-    );
+
+  const stocke = readCredentials();
+  if (stocke) {
+    if (stocke.baseUrl !== ARA_BASE_URL) {
+      console.error(
+        `[ara-mcp] Le jeton enregistré vise ${stocke.baseUrl}, or ARA_BASE_URL vaut ${ARA_BASE_URL}. Jeton ignoré.`
+      );
+    } else {
+      client.setAuthToken(stocke.token);
+      try {
+        const frais = await client.refreshToken();
+        client.setAuthToken(frais);
+        writeCredentials({ ...stocke, token: frais, obtenuLe: new Date().toISOString() });
+        console.error(
+          `[ara-mcp] Session rafraîchie${stocke.username ? ` (${stocke.username})` : ""}.`
+        );
+      } catch {
+        const age = Math.round(ageEnHeures(stocke));
+        console.error(
+          `[ara-mcp] Le jeton enregistré n'est plus valide (obtenu il y a ~${age} h ; ils durent 24 h).\n` +
+            `[ara-mcp] Relancez : npx ara-rgaa-mcp login`
+        );
+      }
+      return;
+    }
+  }
+
+  if (process.env.ARA_USERNAME && process.env.ARA_PASSWORD) {
+    try {
+      const token = await client.signin(
+        process.env.ARA_USERNAME,
+        process.env.ARA_PASSWORD
+      );
+      client.setAuthToken(token);
+      console.error("[ara-mcp] Authentifié depuis ARA_USERNAME / ARA_PASSWORD.");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[ara-mcp] Échec de l'authentification :", message);
+    }
     return;
   }
-  try {
-    await authenticateFromEnv();
-    console.error("[ara-mcp] Auto-authenticated from ARA_USERNAME");
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[ara-mcp] Auto-login failed:", message);
-  }
+
+  console.error(
+    "[ara-mcp] Aucune authentification configurée.\n" +
+      "[ara-mcp] Le plus simple : npx ara-rgaa-mcp login\n" +
+      "[ara-mcp] Sinon, renseignez ARA_AUTH_TOKEN, ou ARA_USERNAME et ARA_PASSWORD."
+  );
 }
 
 // ─── Start ────────────────────────────────────────────────
 
+/** Sous-commandes de la ligne de commande, avant tout démarrage MCP. */
+async function traiterSousCommande(): Promise<number | null> {
+  const cmd = process.argv[2];
+  if (!cmd || cmd.startsWith("-")) return null;
+
+  if (cmd === "login") {
+    const { runLogin } = await import("./login.js");
+    return runLogin(ARA_BASE_URL);
+  }
+
+  if (cmd === "logout") {
+    const efface = clearCredentials();
+    console.error(
+      efface
+        ? `Jeton supprimé (${credentialsPath()}).`
+        : "Aucun jeton enregistré."
+    );
+    return 0;
+  }
+
+  if (cmd === "status") {
+    const s = readCredentials();
+    if (!s) {
+      console.error("Aucun jeton enregistré. Lancez : npx ara-rgaa-mcp login");
+      return 1;
+    }
+    const age = ageEnHeures(s);
+    console.error(`Compte    : ${s.username ?? "(inconnu)"}`);
+    console.error(`Instance  : ${s.baseUrl}`);
+    console.error(`Fichier   : ${credentialsPath()}`);
+    console.error(
+      `Jeton     : obtenu il y a ~${Math.round(age)} h — ${age < 24 ? "encore valide, rafraîchi au prochain démarrage" : "expiré, relancez login"}`
+    );
+    return age < 24 ? 0 : 1;
+  }
+
+  console.error(
+    `Commande inconnue : ${cmd}\n\n` +
+      `Usage :\n` +
+      `  npx ara-rgaa-mcp          démarre le serveur MCP (usage normal)\n` +
+      `  npx ara-rgaa-mcp login    se connecter à Ara et enregistrer le jeton\n` +
+      `  npx ara-rgaa-mcp status    état du jeton enregistré\n` +
+      `  npx ara-rgaa-mcp logout    supprimer le jeton enregistré`
+  );
+  return 2;
+}
+
 async function main() {
-  await autoLogin();
+  const code = await traiterSousCommande();
+  if (code !== null) {
+    process.exit(code);
+  }
+
+  await resoudreAuthentification();
   // Negotiates the protocol revision when the connection opens, and serves
   // both the 2025 era and 2026-07-28 from the same factory.
   serveStdio(() => buildServer());
