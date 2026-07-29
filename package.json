@@ -6,7 +6,7 @@
   "author": "David Pivert",
   "type": "module",
   "bin": {
-    "ara-rgaa-mcp": "./build/index.js"
+    "ara-rgaa-mcp": "build/index.js"
   },
   "files": [
     "build",
