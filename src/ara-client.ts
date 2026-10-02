@@ -382,6 +382,7 @@ export interface AuditResponse {
   publicationDate: string | null;
   editionDate: string | null;
   pages: PageDto[];
+  environments?: (AuditEnvironment & { id?: number })[];
   /** Page « Éléments transverses », créée d'office par Ara. */
   transverseElementsPage?: PageDto & { name: string };
 }

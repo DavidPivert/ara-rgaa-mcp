@@ -1,7 +1,7 @@
 {
   "name": "ara-rgaa-mcp",
   "mcpName": "io.github.DavidPivert/ara-rgaa-mcp",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "description": "Serveur MCP pour Ara — audits d'accessibilité RGAA 4.1 / MCP server for Ara, the French government RGAA 4.1 accessibility audit platform",
   "license": "EUPL-1.2",
   "author": "David Pivert",
@@ -46,7 +46,8 @@
     "start": "node build/index.js",
     "dev": "npx tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "test": "node scripts/tests-hors-ligne.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.0.0",

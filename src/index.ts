@@ -22,6 +22,9 @@ import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { AraClient } from "./ara-client.js";
+import { envoyerParPaquets } from "./envois.js";
+import { ficheDeCopie } from "./fiche.js";
+import { comparer } from "./comparaison.js";
 import {
   readCredentials,
   writeCredentials,
@@ -41,7 +44,7 @@ import {
 // ─── Configuration ────────────────────────────────────────
 
 /** Keep in sync with the "version" field of package.json. */
-const SERVER_VERSION = "2.5.0";
+const SERVER_VERSION = "2.6.0";
 
 const ARA_BASE_URL =
   process.env.ARA_BASE_URL || "https://ara.numerique.gouv.fr/api";
@@ -532,7 +535,7 @@ server.registerTool(
   {
     title: "Update an audit (full replace)",
     description:
-      "Full update of an audit's metadata (procedure info, auditor info, environments, tools, technologies, notes, etc.). This REPLACES the existing metadata: fetch the audit with get_audit first and resend the fields you want to keep.",
+      "Full update of an audit's metadata (procedure info, auditor info, environments, tools, technologies, notes, etc.). This REPLACES the existing metadata: fetch the audit with get_audit first and resend the fields you want to keep.\n\nPAGE ORDER: Ara renumbers the pages in the order of the array you send. Send them sorted by the `order` get_audit returns (keeping each `id`), or the sample is reordered in the report. Verified against the live API.",
     inputSchema: z.object({
           uniqueId: z.string().describe("The editUniqueId of the audit"),
           auditType: z.enum(["FULL", "FAST", "COMPLEMENTARY"]),
@@ -680,24 +683,49 @@ server.registerTool(
   {
     title: "Duplicate an audit",
     description:
-      "Fully duplicate an existing audit (metadata, pages, RGAA results, example images). Returns a new audit with fresh IDs. The source audit is left untouched.",
+      "Duplicate an existing audit for a retest: pages, environments, RGAA results and example images are copied by Ara, with fresh IDs. The source audit is left untouched.\n\nAra's duplicate leaves part of the audit sheet empty (initiator, auditor organisation, procedure URL, contact, technologies, tools — verified against the live API). With copyMetadata (default true), this server then copies those fields from the source into the copy, keeping the pages in the source order. If that second step fails, the copy still exists: its IDs are returned with a warning.",
     inputSchema: z.object({
           uniqueId: z
             .string()
             .describe("The editUniqueId of the audit to duplicate"),
           procedureName: z.string().describe("Name for the duplicated audit"),
+          copyMetadata: z
+            .boolean()
+            .default(true)
+            .describe("Copy the audit sheet fields Ara leaves empty (default true)"),
         }),
     annotations: ADDITIVE,
   },
-  async ({ uniqueId, procedureName }) => {
+  async ({ uniqueId, procedureName, copyMetadata }) => {
     try {
       const audit = await client.duplicateAudit(uniqueId, procedureName);
-      return textResult({
-        message: "Audit duplicated successfully",
+      const ids = {
         newEditUniqueId: audit.editUniqueId,
         newConsultUniqueId: audit.consultUniqueId,
         procedureName: audit.procedureName,
-      });
+      };
+      if (copyMetadata === false) return textResult({ message: "Audit duplicated successfully", ...ids });
+      try {
+        const [source, copie] = await Promise.all([
+          client.getAudit(uniqueId),
+          client.getAudit(audit.editUniqueId),
+        ]);
+        const { payload, repris } = ficheDeCopie(source, copie, procedureName);
+        await client.updateAudit(audit.editUniqueId, payload);
+        return textResult({
+          message: "Audit duplicated successfully, audit sheet copied from the source",
+          ...ids,
+          champsRepris: repris,
+        });
+      } catch (err) {
+        return textResult({
+          message:
+            "Audit duplicated, BUT the audit sheet could not be copied: the copy exists with the fields Ara leaves empty. " +
+            "Keep these IDs, then complete the copy with update_audit (pages sorted by `order`).",
+          ...ids,
+          avertissement: err instanceof Error ? err.message.split("\n")[0] : String(err),
+        });
+      }
     } catch (err) {
       return errorResult(err);
     }
@@ -847,6 +875,47 @@ Also reports whether the audit can be published — Ara refuses publish_audit wh
 );
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  TOOL: compare_audits
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+server.registerTool(
+  "compare_audits",
+  {
+    title: "Comparer deux audits (retest)",
+    description: `Compare two audits of the same sample — typically the initial audit and its retest copy made with duplicate_audit. Read-only.
+
+Pages are matched by name and URL (their ids differ between a source and its copy), transverse elements with transverse elements. Returns, for each audit, the accessibility rate computed with Ara's rule (a criterion is non-compliant if it fails on any page, compliant if it passes on at least one and fails on none, not applicable if so on every page; rate = compliant / (compliant + non-compliant)), the criteria whose audit-level status changed, and the page-level results that changed, counted by transition (NC→C, C→NC, NT→C…).
+
+Use it to report what a retest changed, or to check that an update touched only what it should have.`,
+    inputSchema: z.object({
+      uniqueIdBefore: z.string().describe("editUniqueId of the earlier audit (e.g. the initial audit)"),
+      uniqueIdAfter: z.string().describe("editUniqueId of the later audit (e.g. the retest copy)"),
+      limit: z
+        .number()
+        .int()
+        .min(0)
+        .max(2000)
+        .optional()
+        .describe("Maximum page-level changes listed (default 200; counts are always complete)"),
+    }),
+    annotations: READ_ONLY,
+  },
+  async ({ uniqueIdBefore, uniqueIdAfter, limit }) => {
+    try {
+      const [a, ra, b, rb] = await Promise.all([
+        client.getAudit(uniqueIdBefore),
+        client.getResults(uniqueIdBefore),
+        client.getAudit(uniqueIdAfter),
+        client.getResults(uniqueIdAfter),
+      ]);
+      return textResult(comparer(a, ra, b, rb, limit ?? 200));
+    } catch (err) {
+      return errorResult(err);
+    }
+  }
+);
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  TOOL: update_audit_results
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -864,7 +933,7 @@ The topic/criterium must be a valid RGAA combination. Topics 1-13:
 
 Status values: COMPLIANT, NOT_COMPLIANT, NOT_APPLICABLE, NOT_TESTED
 
-Working through a FULL audit: 106 criteria on every page, transverse elements included. Send them page by page, or topic by topic — not in one call. Between batches, call get_audit_progress to see what is left rather than re-reading every result.
+Working through a FULL audit: 106 criteria on every page, transverse elements included. Send them page by page, or topic by topic. This server sends them to Ara in packets of batchSize (default 20); when Ara answers a packet with a server error (5xx, seen on some packets of topics 10 and 12), the packet is split in half until single results, and the ones still refused alone are listed in "echecs" — the others are saved. Between batches, call get_audit_progress to see what is left rather than re-reading every result.
 
 Before evaluating a criterion, call get_rgaa_criterion to read its wording and its tests: it is what lets you judge rather than guess.
 
@@ -936,10 +1005,17 @@ Describing a non-compliance: the details live in notCompliantItems, one entry pe
               })
             )
             .describe("Array of criterion results to update"),
+          batchSize: z
+            .number()
+            .int()
+            .min(1)
+            .max(100)
+            .optional()
+            .describe("Results per request to Ara (default 20). Lower it if Ara keeps answering 500."),
         }),
     annotations: DESTRUCTIVE,
   },
-  async ({ uniqueId, results }) => {
+  async ({ uniqueId, results, batchSize }) => {
     try {
       // Un verdict CONFORME ou NON CONFORME sur un critère qui ne se tranche
       // pas depuis le source doit s'appuyer sur une vérification déclarée.
@@ -982,9 +1058,27 @@ Describing a non-compliance: the details live in notCompliantItems, one entry pe
           comment: escapeOptional(i.comment),
         })),
       }));
-      await client.updateResults(uniqueId, safe);
+      const bilan = await envoyerParPaquets(safe, (paquet) => client.updateResults(uniqueId, paquet), batchSize ?? 20);
+      const echecs = bilan.echecs.map((e) => ({
+        pageId: e.item.pageId,
+        critere: `${e.item.topic}.${e.item.criterium}`,
+        status: e.item.status,
+        erreur: e.erreur,
+      }));
+      if (echecs.length === results.length) {
+        throw new Error(
+          `Aucun résultat enregistré : Ara a refusé chacun des ${results.length} résultats, même envoyé seul.\n` +
+            echecs.slice(0, 5).map((e) => `  ${e.critere} (page ${e.pageId}) : ${e.erreur}`).join("\n")
+        );
+      }
       return textResult({
-        message: `Successfully updated ${results.length} criterion result(s)`,
+        message: echecs.length
+          ? `ATTENTION : ${bilan.envoyes} résultat(s) enregistré(s), ${echecs.length} refusé(s) par Ara même envoyés seuls (voir echecs). ` +
+            `Un résultat de thématique 4 pré-rempli en NOT_APPLICABLE par Ara (multimedia: false) est refusé ainsi.`
+          : `Successfully updated ${results.length} criterion result(s)`,
+        requetes: bilan.requetes,
+        scissions: bilan.scissions,
+        ...(echecs.length ? { echecs } : {}),
       });
     } catch (err) {
       return errorResult(err);

@@ -84,9 +84,10 @@ Chaque outil porte des **annotations** (`readOnlyHint`, `destructiveHint`, `idem
 | `get_rgaa_criterion` | 📖 référentiel | Un critère, **ses tests** et ce qu'il faut pour le vérifier |
 | `auth_refresh` | ↻ | Rejoue l'authentification depuis l'environnement |
 | `create_audit` | ✚ additif | Créer un nouvel audit |
-| `duplicate_audit` | ✚ additif | Dupliquer un audit (la source n'est pas touchée) |
+| `duplicate_audit` | ✚ additif | Dupliquer un audit pour un retest, **fiche comprise** (la source n'est pas touchée) |
 | `get_audit` | 🔒 lecture seule | Récupérer un audit complet |
 | `get_audit_progress` | 🔒 lecture seule | **Avancement** : ce qui reste à évaluer, par page |
+| `compare_audits` | 🔒 lecture seule | **Retest** : taux avant/après, critères et résultats qui ont changé |
 | `get_audit_results` | 🔒 lecture seule | Résultats de critères, filtrables par page et par statut |
 | `get_report` | 🔒 lecture seule | Rapport complet avec taux de conformité |
 | `export_csv` | 🔒 lecture seule | Export CSV des résultats |
@@ -96,6 +97,24 @@ Chaque outil porte des **annotations** (`readOnlyHint`, `destructiveHint`, `idem
 | `update_statement` | ⚠️ destructif | **Remplace ET publie** la déclaration d'accessibilité |
 | `publish_audit` | ⚠️ destructif | **Rend l'audit public — irréversible** (voir ci-dessous) |
 | `delete_audit` | ⚠️ destructif | Suppression (410 ensuite) — **ne dépublie pas** |
+
+## Retest après correctifs
+
+Le cycle conseillé : audit initial, correctifs, **copie** de l'audit, retest des critères touchés, déclaration depuis la copie.
+
+- **`duplicate_audit` recopie la fiche.** La duplication d'Ara laisse vides le demandeur, l'organisation de l'auditeur, l'URL, le contact, les technologies et les outils (vérifié sur l'API). Le serveur les reprend de la source, en gardant les pages dans l'ordre de la source. Passer `copyMetadata: false` pour s'en tenir à la copie d'Ara. Si cette seconde étape échoue, la copie existe quand même : ses identifiants sont renvoyés avec un avertissement.
+- **`update_audit` renumérote les pages dans l'ordre du tableau envoyé.** Renvoyer les pages triées par `order` (celui de `get_audit`), sinon l'échantillon est réordonné dans le rapport.
+- **`compare_audits`** confronte l'audit initial et sa copie. Les pages sont appariées par nom et URL. Il renvoie le taux de chaque audit calculé selon la règle d'Ara (non conforme sur une page = non conforme ; conforme sur au moins une page et non conforme nulle part = conforme ; taux = conformes / applicables), les critères dont le statut a changé et les transitions page par page (NC→C, C→NC…).
+
+## Envoi des résultats par paquets
+
+`update_audit_results` envoie les résultats à Ara par paquets de 20 (`batchSize`, de 1 à 100). Ara répond parfois 500 à un paquet dont chaque résultat passe seul (constaté sur des paquets de 23 à 36 résultats des thématiques 10 et 12). Le serveur coupe alors le paquet en deux, jusqu'au résultat isolé :
+
+- les résultats acceptés sont enregistrés ;
+- ceux qu'Ara refuse même seuls sont listés dans `echecs` ;
+- une erreur 4xx arrête l'envoi et indique combien de résultats étaient déjà enregistrés.
+
+Chaque envoi remplace l'évaluation visée : renvoyer un paquet est sans effet de bord.
 
 ## Le référentiel RGAA embarqué
 
@@ -197,12 +216,15 @@ Corrigé au passage : `signin` envoyait l'en-tête `Authorization` avec le jeton
 2. create_audit(FULL, "MonSite", pages...)   # Créer l'audit (106 critères)
 3. get_audit(editUniqueId)                   # Récupérer les IDs de page
 4. get_rgaa_criterion(topic, criterium)      # Lire le critère et ses tests
-5. update_audit_results(...)                 # Poser le verdict, page par page
+5. update_audit_results(...)                 # Poser le verdict (envoi par paquets)
 6. get_audit_progress(editUniqueId)          # Que reste-t-il ?
    ↳ revenir en 4 tant qu'il reste des critères
 7. update_statement(editUniqueId, ...)       # Remplir la déclaration
 8. publish_audit(editUniqueId)               # Publier l'audit terminé
 9. get_report(consultUniqueId)               # Consulter le rapport final
+
+Retest : duplicate_audit (fiche comprise) → update_audit_results sur la copie
+         → compare_audits(initial, copie) → update_statement sur la copie
 ```
 
 **L'audit complet est le cas normal** : seul un audit sur les 106 critères fonde une déclaration d'accessibilité. `FAST` (25 critères) et `COMPLEMENTARY` (25 autres) servent à repérer, pas à déclarer.
@@ -298,6 +320,7 @@ cd ara-rgaa-mcp
 npm install
 npm run build      # compile vers build/
 npm run typecheck  # tsc --noEmit
+npm test           # tests hors ligne (envoi par paquets, fiche, comparaison), après le build
 ```
 
 Pour brancher la copie locale sur un client MCP, pointer `command` sur `node` et `args` sur le chemin absolu de `build/index.js` — ou utiliser `run.sh`, qui fait le `cd` nécessaire à la résolution des `node_modules`.
