@@ -52,6 +52,9 @@ const SIGNAUX = {
 const CORRECTIONS = {
   // « la prise de focus est-elle visible ? » : il faut tabuler ET regarder.
   "10.7": ["clavier", "rendu"],
+  // « taille restituée » désigne la taille affichée, pas une restitution vocale :
+  // un contraste se mesure sur le rendu, sans lecteur d'écran.
+  "3.2": ["rendu"],
   // composants scriptés : rôle, nom et états s'observent dans l'arbre d'accessibilité.
   "7.1": ["restitution"],
   "7.2": ["restitution"],
