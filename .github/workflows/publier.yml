@@ -1,0 +1,61 @@
+# Publication sur npm par « publication de confiance » (OIDC) : aucun jeton ni clé.
+# npm vérifie que la publication vient de ce dépôt et de ce fichier, déclarés dans
+# les réglages du paquet sur npmjs.com (Trusted Publisher → GitHub Actions,
+# DavidPivert / ara-rgaa-mcp / publier.yml). Une attestation d'origine est jointe.
+#
+# Déclenchement : push d'un tag de version (v2.7.0…), ou « Run workflow » à la main
+# pour publier la version de package.json (par exemple après un échec).
+name: Publier sur npm
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # jeton OIDC pour npm
+
+concurrency:
+  group: publier-npm
+  cancel-in-progress: false
+
+jobs:
+  publier:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      # La publication de confiance exige npm 11.5.1 ou plus récent.
+      - name: npm 11
+        run: npm install -g npm@11 && npm --version
+
+      - name: Version à publier
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
+            echo "::error::Le tag $GITHUB_REF_NAME ne correspond pas à package.json ($VERSION)."
+            exit 1
+          fi
+          if [ -n "$(npm view "ara-rgaa-mcp@$VERSION" version 2>/dev/null)" ]; then
+            echo "deja=oui" >> "$GITHUB_OUTPUT"
+            echo "::notice::ara-rgaa-mcp@$VERSION est déjà publié : rien à faire."
+          fi
+
+      - name: Installation, compilation, tests
+        if: steps.version.outputs.deja != 'oui'
+        run: |
+          npm ci
+          npm run build
+          npm test
+
+      - name: Publication
+        if: steps.version.outputs.deja != 'oui'
+        run: npm publish --access public

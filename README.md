@@ -323,6 +323,8 @@ npm run typecheck  # tsc --noEmit
 npm test           # tests hors ligne (envoi par paquets, fiche, comparaison), après le build
 ```
 
+**Publication.** Le paquet est publié sur npm par GitHub Actions (`.github/workflows/publier.yml`) en « publication de confiance » (OIDC), sans jeton ni clé, avec une attestation d'origine. Pour une nouvelle version : monter la version dans `package.json` et `server.json`, fusionner dans `main`, puis pousser le tag `vX.Y.Z`. Le workflow refuse un tag qui ne correspond pas à `package.json` et ne republie pas une version déjà en ligne. Le bouton « Run workflow » publie la version de `package.json` si elle manque.
+
 Pour brancher la copie locale sur un client MCP, pointer `command` sur `node` et `args` sur le chemin absolu de `build/index.js` — ou utiliser `run.sh`, qui fait le `cd` nécessaire à la résolution des `node_modules`.
 
 ## Licence
